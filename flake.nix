@@ -22,6 +22,7 @@
             nodejs_24
             bubblewrap # For unprivileged sandboxing
             vscode
+            claude-code
           ];
 
           shellHook = ''
