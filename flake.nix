@@ -23,6 +23,7 @@
             bubblewrap # For unprivileged sandboxing
             vscode
             claude-code
+            gh
           ];
 
           shellHook = ''
