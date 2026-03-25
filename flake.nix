@@ -25,6 +25,8 @@
             claude-code
             gh
             nodejs_24
+            python3
+            rustup
             vscode
             wabt
           ];
