@@ -19,11 +19,14 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            nodejs_24
-            bubblewrap # For unprivileged sandboxing
-            vscode
+            binaryen
+            bubblewrap
+            cargo
             claude-code
             gh
+            nodejs_24
+            vscode
+            wabt
           ];
 
           shellHook = ''
