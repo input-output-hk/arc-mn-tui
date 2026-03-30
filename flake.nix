@@ -25,6 +25,7 @@
             claude-code
             gh
             nodejs_24
+            pandoc
             python3
             rustup
             vscode
