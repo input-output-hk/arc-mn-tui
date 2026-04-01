@@ -23,7 +23,10 @@
             bubblewrap
             cargo
             claude-code
+            ebook-convert
             gh
+            mdbook
+            mdbook-epub
             nodejs_24
             pandoc
             python3
