@@ -14,14 +14,13 @@ const SCREEN_ITEMS: {key: string; label: string; screen: Screen}[] = [
 ];
 
 interface Props {
-  current:    Screen;
-  onNavigate: (screen: Screen) => void;
-  onExit:     () => void;
+  current:     Screen;
+  onNavigate:  (screen: Screen) => void;
+  hasNewLogs:  boolean;
 }
 
-export default function NavMenu({current, onNavigate, onExit}: Props) {
+export default function NavMenu({current, onNavigate, hasNewLogs}: Props) {
   useInput((input) => {
-    if (input === 'q') { onExit(); return; }
     const item = SCREEN_ITEMS.find(i => i.key === input);
     if (item) onNavigate(item.screen);
   });
@@ -29,16 +28,19 @@ export default function NavMenu({current, onNavigate, onExit}: Props) {
   return (
     <Box borderStyle="single" paddingX={1} gap={2} flexWrap="wrap">
       {SCREEN_ITEMS.map(({key, label, screen}) => (
-        <Text
-          key={screen}
-          bold={current === screen}
-          color={current === screen ? 'cyan' : undefined}
-          dimColor={current !== screen}
-        >
-          [{key}] {label}
-        </Text>
+        <Box key={screen} gap={0}>
+          <Text
+            bold={current === screen}
+            color={current === screen ? 'cyan' : undefined}
+            dimColor={current !== screen}
+          >
+            [{key}] {label}
+          </Text>
+          {screen === 'logs' && hasNewLogs && current !== 'logs' && (
+            <Text color="yellow"> ●</Text>
+          )}
+        </Box>
       ))}
-      <Text dimColor>[q] Exit</Text>
     </Box>
   );
 }

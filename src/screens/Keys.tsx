@@ -145,20 +145,20 @@ export default function Keys({network}: Props) {
           {wallets.length === 0
             ? <Text dimColor>No wallets loaded — press [a] to add one.</Text>
             : wallets.map((w, i) => (
-                <Text
-                  key={i}
-                  bold={i === cursor}
-                  color={i === cursor ? 'cyan' : undefined}
-                  dimColor={i !== cursor}
-                >
-                  {i === activeIndex ? '●' : '○'}{' '}
-                  {String(i).padStart(2)}{'  '}{w.name.padEnd(14)}
-                  <Text color={i === cursor ? 'white' : undefined}>
-                    {w.unshielded.slice(0, 22)}…
+                <Box key={i} flexDirection="row">
+                  <Text
+                    bold={i === cursor}
+                    color={i === cursor ? 'cyan' : undefined}
+                    dimColor={i !== cursor}
+                  >
+                    {i === activeIndex ? '●' : '○'}{' '}
+                    {String(i).padStart(2)}{'  '}{w.name.padEnd(14)}
                   </Text>
-                  {'  '}
-                  <Text dimColor>{sourceLabel(persisted[i], i)}</Text>
-                </Text>
+                  <Text color={i === cursor ? 'white' : undefined} wrap="truncate">
+                    {w.unshielded}
+                  </Text>
+                  <Text dimColor>{'  '}{sourceLabel(persisted[i], i)}</Text>
+                </Box>
               ))
           }
         </Box>

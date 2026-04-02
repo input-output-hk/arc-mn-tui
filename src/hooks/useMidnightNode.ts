@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react';
+import {useState, useEffect, useRef} from 'react';
 import type {NodeState} from '../types.js';
 import {logger} from '../logger.js';
 
@@ -106,9 +106,10 @@ const EMPTY: NodeState = {
   rpcUrl:       '',
 };
 
-export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_000) {
+export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_000, paused = false) {
   const [node,  setNode]  = useState<NodeState>({...EMPTY, rpcUrl});
   const [error, setError] = useState<string | null>(null);
+  const lastHeightRef     = useRef<number>(-1);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +125,10 @@ export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_0
         ]);
 
         if (cancelled) return;
+
+        const newHeight = parseInt(header.number, 16);
+        if (newHeight === lastHeightRef.current) return; // block unchanged — skip re-render
+        lastHeightRef.current = newHeight;
 
         const currentSlot  = parseAuraSlot(header.digest.logs);
         const epochIndex   = Math.floor(currentSlot / EPOCH_LENGTH_SLOTS);
@@ -150,10 +155,13 @@ export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_0
       }
     }
 
-    poll();
-    const id = setInterval(() => { if (!cancelled) poll(); }, intervalMs);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [rpcUrl, intervalMs]);
+    if (!paused) {
+      poll();
+      const id = setInterval(() => { if (!cancelled) poll(); }, intervalMs);
+      return () => { cancelled = true; clearInterval(id); };
+    }
+    return () => { cancelled = true; };
+  }, [rpcUrl, intervalMs, paused]);
 
   return {node, error};
 }

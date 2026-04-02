@@ -1,4 +1,4 @@
-import {useState, useCallback}         from 'react';
+import React, {createContext, useContext, useState, useCallback} from 'react';
 import type {WalletEntry, TokenBalance, SendParams, TxStatus} from '../types.js';
 import {loadConfig, saveConfig}        from '../config.js';
 import type {PersistedWallet}          from '../config.js';
@@ -14,10 +14,36 @@ const STUB_BALANCES: TokenBalance[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Hook
+// Context value type
 // ---------------------------------------------------------------------------
 
-export function useWallet() {
+interface WalletContextValue {
+  wallets:        WalletEntry[];
+  persisted:      PersistedWallet[];
+  activeIndex:    number;
+  activeWallet:   WalletEntry | null;
+  addWallet:      (pw: PersistedWallet, plainMnemonic?: string) => void;
+  removeWallet:   (idx: number) => void;
+  setActiveIndex: (idx: number) => void;
+  isCached:       (idx: number) => boolean;
+  getMnemonic:    (idx: number) => string | undefined;
+  unlockWallet:   (idx: number, passphrase: string) => Promise<void>;
+  wallet:         {connected: boolean; address: string; balances: TokenBalance[]};
+  txStatus:       TxStatus;
+  send:           (params: SendParams) => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+const WalletContext = createContext<WalletContextValue | null>(null);
+
+// ---------------------------------------------------------------------------
+// Provider — holds all shared wallet state; mount once near the root
+// ---------------------------------------------------------------------------
+
+export function WalletProvider({children}: {children: React.ReactNode}) {
   const [persisted,    setPersisted]    = useState<PersistedWallet[]>(
     () => loadConfig().wallets ?? [],
   );
@@ -28,11 +54,10 @@ export function useWallet() {
   });
   const [txStatus,     setTxStatus]     = useState<TxStatus>({stage: 'idle'});
 
-  // Session-only mnemonic cache: index → plaintext mnemonic.
+  // Session-only mnemonic cache: wallet index → plaintext mnemonic.
   // Never persisted; cleared when wallets are removed (indices shift).
   const [mnemonicCache, setMnemonicCache] = useState<Map<number, string>>(() => new Map());
 
-  // Derived view — no source metadata exposed outside this hook
   const wallets: WalletEntry[] = persisted.map(p => ({
     name: p.name, unshielded: p.unshielded, shielded: p.shielded, dust: p.dust,
   }));
@@ -41,10 +66,9 @@ export function useWallet() {
 
   // ---- mnemonic cache helpers ---------------------------------------------
 
-  const isCached  = useCallback((idx: number) => mnemonicCache.has(idx), [mnemonicCache]);
+  const isCached    = useCallback((idx: number) => mnemonicCache.has(idx), [mnemonicCache]);
   const getMnemonic = useCallback((idx: number) => mnemonicCache.get(idx), [mnemonicCache]);
 
-  /** Decrypt the wallet at idx and store the plaintext in the session cache. */
   const unlockWallet = useCallback(async (idx: number, passphrase: string): Promise<void> => {
     const pw = persisted[idx];
     if (!pw?.encryptedMnemonic) throw new Error('Wallet has no encrypted mnemonic');
@@ -69,8 +93,6 @@ export function useWallet() {
   }, []);
 
   const removeWallet = useCallback((idx: number) => {
-    // Clear the entire cache because removing a wallet shifts all subsequent
-    // indices, making any cached entries for those indices stale.
     setMnemonicCache(new Map());
     setPersisted(prev => {
       const next    = prev.filter((_, i) => i !== idx);
@@ -101,20 +123,30 @@ export function useWallet() {
     setTxStatus({stage: 'pending', txHash: '0xSTUB_TX_HASH'});
   }, []);
 
-  // ---- legacy wallet object (for BalanceTable, Dashboard) ----------------
-
   const wallet = {
     connected: activeWallet !== null,
     address:   activeWallet?.unshielded ?? '',
     balances:  STUB_BALANCES,
   };
 
-  return {
+  const value: WalletContextValue = {
     wallets, persisted, activeIndex, activeWallet,
     addWallet, removeWallet, setActiveIndex,
     isCached, getMnemonic, unlockWallet,
     wallet, txStatus, send,
   };
+
+  return React.createElement(WalletContext.Provider, {value}, children);
+}
+
+// ---------------------------------------------------------------------------
+// Hook — consumes the shared context
+// ---------------------------------------------------------------------------
+
+export function useWallet(): WalletContextValue {
+  const ctx = useContext(WalletContext);
+  if (!ctx) throw new Error('useWallet must be used inside <WalletProvider>');
+  return ctx;
 }
 
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
