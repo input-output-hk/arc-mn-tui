@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback }     from 'react';
 import * as path                                         from 'node:path';
 import * as fs                                           from 'node:fs';
-import { pathToFileURL }                                 from 'node:url';
+import { pathToFileURL, fileURLToPath }                  from 'node:url';
 import { Buffer }                                        from 'buffer';
 import { WebSocket }                                     from 'ws';
 import * as Rx                                           from 'rxjs';
@@ -18,19 +18,39 @@ import {
 }                                                        from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
-import { deployContract }                                from '@midnight-ntwrk/midnight-js-contracts';
+import { deployContract, findDeployedContract }          from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledContract }                              from '@midnight-ntwrk/compact-js';
 import { NodeZkConfigProvider }                          from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { httpClientProofProvider }                       from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider }                     from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { levelPrivateStateProvider }                     from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import type { NetworkConfig, TxStatus }                  from '../types.js';
-import { loadState, saveState, deleteState }             from '../walletCache.js';
+import { loadState, saveState, deleteState, CACHE_DIR }  from '../walletCache.js';
 import { logger }                                       from '../logger.js';
 
 // Allow the wallet SDK to use WebSocket for GraphQL subscriptions.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).WebSocket = WebSocket;
+
+// Workaround for ledger-v7 7.0.0/7.0.1 bug: MerkleTree::collapse panics on non-empty
+// trees when producing shielded outputs. See: https://github.com/geofflittle/tryapply-crash-repro
+const _origTryApply = ledger.ZswapChainState.prototype.tryApply;
+ledger.ZswapChainState.prototype.tryApply = function (...args: unknown[]) {
+  try {
+    return _origTryApply.apply(this, args as any);
+  } catch {
+    return [this, new Map()];
+  }
+};
+
+/** Built-in fungible-token managed/ directory, resolved relative to this module. */
+const BUILTIN_FT_MANAGED = fileURLToPath(
+  new URL('../../contracts/managed/fungible-token', import.meta.url));
+
+export interface MintResult {
+  txHash:    string;
+  tokenType: string;
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,6 +97,12 @@ export interface WalletSyncState {
   deployTxStatus:  TxStatus;
   deploy:          (managedPath: string, witnessesPath: string | null) => Promise<void>;
   resetDeploy:     () => void;
+  /** Deploy the built-in fungible-token contract. Returns the contract address. */
+  deployFT:        () => Promise<string>;
+  mintTxStatus:    TxStatus;
+  mintResult:      MintResult | null;
+  mint:            (contractAddress: string, amount: bigint) => Promise<void>;
+  resetMint:       () => void;
 }
 
 // Internal sync-only slice; txStatus/send/resetTx are composed at return time.
@@ -140,6 +166,8 @@ export function useWalletSync(
   const [syncState,       setSyncState]       = useState<SyncCore>(SYNC_IDLE);
   const [txStatus,        setTxStatus]        = useState<TxStatus>({stage: 'idle'});
   const [deployTxStatus,  setDeployTxStatus]  = useState<TxStatus>({stage: 'idle'});
+  const [mintTxStatus,    setMintTxStatus]    = useState<TxStatus>({stage: 'idle'});
+  const [mintResult,      setMintResult]      = useState<MintResult | null>(null);
 
   // Refs for wallet internals — accessible from stable send callback without
   // restarting the wallet subscription.
@@ -472,9 +500,11 @@ export function useWalletSync(
         return;
       }
 
-      // Coin/encryption public keys come from the live wallet state.
+      // Coin/encryption public keys — wait for a synced state to ensure keys are valid.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const state            = await Rx.firstValueFrom((f as any).state());
+      const state            = await Rx.firstValueFrom(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f as any).state().pipe(Rx.filter((s: any) => s.isSynced)));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const coinPublicKey    = (state as any).shielded.coinPublicKey.toHexString() as string;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -513,6 +543,8 @@ export function useWalletSync(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const providers: any = {
         privateStateProvider: levelPrivateStateProvider({
+          // Wallet-specific LevelDB dir prevents AES-GCM failures when switching wallets.
+          midnightDbName:       path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
           privateStateStoreName: contractName + '-state',
           walletProvider,
         }),
@@ -566,9 +598,247 @@ export function useWalletSync(
       logger.info(`Deployed contract "${contractName}" at ${contractAddress} on ${net.name}`);
 
     } catch (e) {
-      setDeployTxStatus({stage: 'failed', error: e instanceof Error ? e.message : String(e)});
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error('Deploy failed', e);
+      setDeployTxStatus({stage: 'failed', error: msg});
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { ...syncState, txStatus, send, resetTx, deployTxStatus, deploy, resetDeploy };
+  // ---------------------------------------------------------------------------
+  // Deploy FT — deploys the built-in fungible-token contract; returns address.
+  // Used by the Mint screen's "deploy new" flow.
+  // ---------------------------------------------------------------------------
+
+  const deployFT = useCallback(async (): Promise<string> => {
+    const f   = facadeRef.current;
+    const sk  = shieldedKeysRef.current;
+    const dk  = dustKeyRef.current;
+    const ks  = keystoreRef.current;
+    const net = networkRef.current;
+    if (!f || !sk || !dk || !ks) throw new Error('Wallet not connected');
+
+    const absManaged = BUILTIN_FT_MANAGED;
+    const contractJs = path.join(absManaged, 'contract', 'index.js');
+    if (!fs.existsSync(contractJs))
+      throw new Error(`No compiled contract at ${contractJs}`);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await Rx.firstValueFrom(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (f as any).state().pipe(Rx.filter((s: any) => s.isSynced)));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const coinPublicKey = (state as any).shielded.coinPublicKey.toHexString() as string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const encPublicKey  = (state as any).shielded.encryptionPublicKey.toHexString() as string;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const walletProvider = {
+      getCoinPublicKey:       () => coinPublicKey,
+      getEncryptionPublicKey: () => encPublicKey,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async balanceTx(tx: any, ttl?: Date) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const recipe = await (f as any).balanceUnboundTransaction(
+          tx,
+          {shieldedSecretKeys: sk, dustSecretKey: dk},
+          {ttl: ttl ?? new Date(Date.now() + 30 * 60_000)},
+        );
+        const signFn = (payload: Uint8Array) => ks.signData(payload);
+        signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
+        if (recipe.balancingTransaction) {
+          signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (f as any).finalizeRecipe(recipe);
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      submitTx: (tx: any) => (f as any).submitTransaction(tx) as any,
+    };
+
+    const indexerHttpUrl = net.indexerUrl;
+    const indexerWsUrl   = toWsUrl(indexerHttpUrl) + '/ws';
+    const zkCfgProvider  = new NodeZkConfigProvider(absManaged);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const providers: any = {
+      privateStateProvider: levelPrivateStateProvider({
+        midnightDbName:        path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
+        privateStateStoreName: 'fungible-token-state',
+        walletProvider,
+      }),
+      publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
+      zkConfigProvider:   zkCfgProvider,
+      proofProvider:      httpClientProofProvider(net.proofServerUrl, zkCfgProvider),
+      walletProvider,
+      midnightProvider:   walletProvider,
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contractModule: any = await import(pathToFileURL(contractJs).href);
+
+    const coinBytes = new Uint8Array(32);
+    coinBytes.set(Buffer.from(coinPublicKey.replace(/^0x/, ''), 'hex').subarray(0, 32));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const makeWit: any    = CompiledContract.withWitnesses;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withAssets: any = CompiledContract.withCompiledFileAssets;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const compiledContract = (CompiledContract.make('fungible-token', contractModule.Contract) as any).pipe(
+      makeWit({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        get_user_shielded_address: (context: any) => [context.privateState, {bytes: coinBytes}],
+      }),
+      withAssets(absManaged),
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const deployed: any = await (deployContract as any)(providers, {
+      compiledContract,
+      privateStateId:      'fungibleTokenState',
+      initialPrivateState: {},
+    });
+
+    const contractAddress: string = deployed.deployTxData.public.contractAddress;
+    logger.info(`Deployed fungible-token contract at ${contractAddress} on ${net.name}`);
+    return contractAddress;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------------------------------------------------------------------------
+  // Mint (fungible-token contract, built-in managed path)
+  // ---------------------------------------------------------------------------
+
+  const resetMint = useCallback(() => {
+    setMintTxStatus({stage: 'idle'});
+    setMintResult(null);
+  }, []);
+
+  const mint = useCallback(async (rawContractAddress: string, amount: bigint): Promise<void> => {
+    // Normalise: strip any leading 0x so the address is plain hex throughout.
+    const contractAddress = rawContractAddress.replace(/^0x/i, '');
+    const f   = facadeRef.current;
+    const sk  = shieldedKeysRef.current;
+    const dk  = dustKeyRef.current;
+    const ks  = keystoreRef.current;
+    const net = networkRef.current;
+    if (!f || !sk || !dk || !ks) {
+      setMintTxStatus({stage: 'failed', error: 'Wallet not connected'});
+      return;
+    }
+    try {
+      setMintTxStatus({stage: 'building'});
+      setMintResult(null);
+
+      // Wait for a synced state so that coin/encryption keys are fully initialised.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state         = await Rx.firstValueFrom(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f as any).state().pipe(Rx.filter((s: any) => s.isSynced)));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const coinPublicKey = (state as any).shielded.coinPublicKey.toHexString() as string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const encPublicKey  = (state as any).shielded.encryptionPublicKey.toHexString() as string;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const walletProvider = {
+        getCoinPublicKey:       () => coinPublicKey,
+        getEncryptionPublicKey: () => encPublicKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        async balanceTx(tx: any, ttl?: Date) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const recipe = await (f as any).balanceUnboundTransaction(
+            tx,
+            {shieldedSecretKeys: sk, dustSecretKey: dk},
+            {ttl: ttl ?? new Date(Date.now() + 30 * 60_000)},
+          );
+          const signFn = (payload: Uint8Array) => ks.signData(payload);
+          signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
+          if (recipe.balancingTransaction) {
+            signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (f as any).finalizeRecipe(recipe);
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        submitTx: (tx: any) => (f as any).submitTransaction(tx) as any,
+      };
+
+      const indexerHttpUrl = net.indexerUrl;
+      const indexerWsUrl   = toWsUrl(indexerHttpUrl) + '/ws';
+      const absManaged     = BUILTIN_FT_MANAGED;
+      const contractJs     = path.join(absManaged, 'contract', 'index.js');
+      const zkCfgProvider  = new NodeZkConfigProvider(absManaged);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const providers: any = {
+        privateStateProvider: levelPrivateStateProvider({
+          // Wallet-specific LevelDB dir prevents AES-GCM failures when switching wallets.
+          midnightDbName:       path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
+          privateStateStoreName: 'fungible-token-state',
+          walletProvider,
+        }),
+        publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
+        zkConfigProvider:   zkCfgProvider,
+        proofProvider:      httpClientProofProvider(net.proofServerUrl, zkCfgProvider),
+        walletProvider,
+        midnightProvider:   walletProvider,
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contractModule: any = await import(pathToFileURL(contractJs).href);
+
+      // token_id_bytes = contract address as Bytes<32>
+      const cleanHex     = contractAddress.replace(/^0x/, '');
+      const tokenIdBytes = new Uint8Array(32);
+      tokenIdBytes.set(Buffer.from(cleanHex, 'hex').subarray(0, 32));
+
+      // coin public key bytes for the witness
+      const coinBytes = new Uint8Array(32);
+      coinBytes.set(Buffer.from(coinPublicKey.replace(/^0x/, ''), 'hex').subarray(0, 32));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const makeWit: any    = CompiledContract.withWitnesses;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const withAssets: any = CompiledContract.withCompiledFileAssets;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const compiledContract = (CompiledContract.make('fungible-token', contractModule.Contract) as any).pipe(
+        makeWit({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          get_user_shielded_address: (context: any) => [context.privateState, {bytes: coinBytes}],
+        }),
+        withAssets(absManaged),
+      );
+
+      setMintTxStatus({stage: 'proving'});
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contract: any = await (findDeployedContract as any)(providers, {
+        contractAddress,
+        compiledContract,
+        privateStateId:      'fungibleTokenState',
+        initialPrivateState: {},
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any  = await contract.callTx.mint(amount, tokenIdBytes);
+      const txHash       = result.public.txHash   as string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tokenType    = (result.private.newCoins[0] as any)?.type as string ?? '';
+
+      setMintResult({txHash, tokenType});
+      setMintTxStatus({stage: 'pending', txHash});
+      logger.info(
+        `Minted ${amount} token units from contract ${contractAddress} | ` +
+        `token type: ${tokenType} | txHash: ${txHash} | network: ${net.name}`);
+
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error('Mint failed', e);
+      setMintTxStatus({stage: 'failed', error: msg});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return {
+    ...syncState, txStatus, send, resetTx,
+    deployTxStatus, deploy, resetDeploy, deployFT,
+    mintTxStatus, mintResult, mint, resetMint,
+  };
 }

@@ -4,11 +4,16 @@
   "description": "Terminal UI for basic Midnight wallet operations",
   "type": "module",
   "scripts": {
+    "compile": "compact compile contracts/fungible-token.compact contracts/managed/fungible-token",
     "start": "tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
+  "files": [
+    "dist/",
+    "contracts/"
+  ],
   "dependencies": {
     "@midnight-ntwrk/compact-js": "^2.4.0",
     "@midnight-ntwrk/ledger-v7": "7.0.0",

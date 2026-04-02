@@ -94,7 +94,7 @@ export default function App() {
         )}
         {screen === 'dashboard' && <Dashboard network={network} paused={paused} walletSync={walletSync} />}
         {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} />}
-        {screen === 'mint'      && <Mint      onComplete={toDash} />}
+        {screen === 'mint'      && <Mint      onComplete={toDash} walletSync={walletSync} />}
         {screen === 'deploy'    && <Deploy    onComplete={toDash} walletSync={walletSync} />}
         {screen === 'keys'      && <Keys network={network} />}
         {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} />}

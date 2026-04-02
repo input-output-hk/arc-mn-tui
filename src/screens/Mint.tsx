@@ -1,44 +1,90 @@
-import React, {useState} from 'react';
-import {Box, Text} from 'ink';
-import TextInput   from 'ink-text-input';
-import SelectInput from 'ink-select-input';
-import TxStatusComponent from '../components/TxStatus.js';
-import {useWallet} from '../hooks/useWallet.js';
-import type {MintParams} from '../types.js';
+import React, {useState, useEffect} from 'react';
+import {Box, Text, useInput}         from 'ink';
+import TextInput                     from 'ink-text-input';
+import SelectInput                   from 'ink-select-input';
+import TxStatusComponent             from '../components/TxStatus.js';
+import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 
-type Step = 'kind' | 'contract' | 'recipient' | 'amount' | 'confirm' | 'submitting';
+type Step = 'contract' | 'deploying' | 'amount' | 'confirm' | 'minting';
 
 interface Props {
   onComplete: () => void;
+  walletSync: WalletSyncState;
 }
 
-export default function Mint({onComplete}: Props) {
-  const {txStatus} = useWallet();
+export default function Mint({onComplete, walletSync}: Props) {
+  const {mintTxStatus, mintResult, mint, resetMint, deployFT} = walletSync;
 
-  const [step,            setStep]            = useState<Step>('kind');
-  const [shielded,        setShielded]        = useState(false);
+  const [step,            setStep]            = useState<Step>('contract');
   const [contractAddress, setContractAddress] = useState('');
-  const [recipient,       setRecipient]       = useState('');
-  const [amount,          setAmount]          = useState('');
+  const [amountStr,       setAmountStr]       = useState('');
+  const [deployError,     setDeployError]     = useState<string | null>(null);
 
-  async function handleConfirm() {
-    setStep('submitting');
-    const _params: MintParams = {contractAddress, recipient, amount, shielded};
-    // TODO: call the token contract's mint entry-point via the wallet SDK.
-    //   For an unshielded token:
-    //     wallet.contractCall(contractAddress, 'mint', { recipient, amount })
-    //   For a shielded token:
-    //     wallet.contractCall(contractAddress, 'mintShielded', { recipient, amount })
-    await new Promise(r => setTimeout(r, 3_000)); // stub delay
-    void _params;
+  useEffect(() => { resetMint(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useInput((_, key) => {
+    if (step === 'minting') {
+      if ((mintTxStatus.stage === 'pending' || mintTxStatus.stage === 'failed') && key.return) {
+        onComplete();
+      }
+      return;
+    }
+    if (step === 'deploying') return; // no escape while deploying
+    if (key.escape) {
+      if (step === 'amount')  { setStep('contract'); return; }
+      if (step === 'confirm') { setStep('amount');   return; }
+    }
+  });
+
+  function handleContractSubmit(value: string) {
+    const p = value.trim();
+    if (!p) {
+      // Empty → deploy a new fungible-token contract.
+      setDeployError(null);
+      setStep('deploying');
+      void deployFT().then(addr => {
+        setContractAddress(addr);
+        setStep('amount');
+      }).catch((e: unknown) => {
+        setDeployError(e instanceof Error ? e.message : String(e));
+        setStep('contract');
+      });
+      return;
+    }
+    setContractAddress(p);
+    setStep('amount');
   }
 
-  if (step === 'submitting') {
+  function handleAmountSubmit(value: string) {
+    const v = value.trim();
+    if (!v || isNaN(Number(v))) return;
+    setAmountStr(v);
+    setStep('confirm');
+  }
+
+  async function handleMint() {
+    setStep('minting');
+    await mint(contractAddress, BigInt(amountStr));
+  }
+
+  if (step === 'minting') {
     return (
       <Box flexDirection="column" gap={1}>
-        <TxStatusComponent status={txStatus} />
-        {txStatus.stage === 'confirmed' && (
-          <Text color="green">Press Enter to return to dashboard</Text>
+        {mintTxStatus.stage === 'pending' ? (
+          <Box flexDirection="column" gap={1}>
+            <Text color="green">● Minted</Text>
+            <Text dimColor>Token type:</Text>
+            <Text>{mintResult?.tokenType ?? ''}</Text>
+            <Text dimColor>Tx hash: <Text color="white">{mintTxStatus.txHash}</Text></Text>
+            <Text dimColor>Press Enter to return to dashboard.</Text>
+          </Box>
+        ) : (
+          <>
+            <TxStatusComponent status={mintTxStatus} />
+            {mintTxStatus.stage === 'failed' && (
+              <Text dimColor>Press Enter to return to dashboard.</Text>
+            )}
+          </>
         )}
       </Box>
     );
@@ -47,56 +93,44 @@ export default function Mint({onComplete}: Props) {
   return (
     <Box flexDirection="column" gap={1}>
       <Text bold color="cyan">Mint Tokens</Text>
-
-      {step === 'kind' && (
-        <Box flexDirection="column">
-          <Text>Select token type to mint:</Text>
-          <SelectInput
-            items={[
-              {label: 'Unshielded token', value: 'unshielded'},
-              {label: 'Shielded token',   value: 'shielded'},
-            ]}
-            onSelect={item => {
-              setShielded(item.value === 'shielded');
-              setStep('contract');
-            }}
-          />
-        </Box>
-      )}
+      <Text dimColor>Mints to the calling wallet's shielded address.</Text>
 
       {step === 'contract' && (
-        <Box gap={1}>
-          <Text>Contract address: </Text>
-          <TextInput
-            value={contractAddress}
-            onChange={setContractAddress}
-            onSubmit={() => setStep('recipient')}
-            placeholder="0x…"
-          />
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Enter a contract address, or press Enter to deploy a new one.</Text>
+          <Box gap={1}>
+            <Text>Contract address: </Text>
+            <TextInput
+              value={contractAddress}
+              onChange={setContractAddress}
+              onSubmit={handleContractSubmit}
+              placeholder="(blank = deploy new)"
+            />
+          </Box>
+          {deployError && <Text color="red">Deploy failed: {deployError}</Text>}
         </Box>
       )}
 
-      {step === 'recipient' && (
-        <Box gap={1}>
-          <Text>Recipient: </Text>
-          <TextInput
-            value={recipient}
-            onChange={setRecipient}
-            onSubmit={() => setStep('amount')}
-            placeholder={shielded ? 'shielded address' : '0x…'}
-          />
+      {step === 'deploying' && (
+        <Box flexDirection="column" gap={1}>
+          <Text>Deploying new fungible-token contract…</Text>
+          <Text dimColor>ZK proof generation will take 30–60 seconds.</Text>
         </Box>
       )}
 
       {step === 'amount' && (
-        <Box gap={1}>
-          <Text>Amount: </Text>
-          <TextInput
-            value={amount}
-            onChange={setAmount}
-            onSubmit={() => setStep('confirm')}
-            placeholder="0.000000"
-          />
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Contract <Text color="white">{contractAddress}</Text></Text>
+          <Box gap={1}>
+            <Text>Amount: </Text>
+            <TextInput
+              value={amountStr}
+              onChange={setAmountStr}
+              onSubmit={handleAmountSubmit}
+              placeholder="1000"
+            />
+          </Box>
+          <Text dimColor>[Esc] back</Text>
         </Box>
       )}
 
@@ -104,19 +138,20 @@ export default function Mint({onComplete}: Props) {
         <Box flexDirection="column" gap={1}>
           <Text bold>Confirm mint</Text>
           <Text dimColor>Contract  <Text color="white">{contractAddress}</Text></Text>
-          <Text dimColor>Recipient <Text color="white">{recipient}</Text></Text>
-          <Text dimColor>Amount    <Text color="white">{amount}</Text></Text>
-          <Text dimColor>Shielded  <Text color="white">{String(shielded)}</Text></Text>
+          <Text dimColor>Amount    <Text color="white">{amountStr}</Text></Text>
+          <Text dimColor>Recipient <Text color="white">this wallet's shielded address</Text></Text>
+          <Text dimColor>ZK proof generation will take 30–60 seconds.</Text>
           <SelectInput
             items={[
-              {label: 'Confirm', value: 'confirm'},
-              {label: 'Cancel',  value: 'cancel'},
+              {label: 'Mint',   value: 'mint'},
+              {label: 'Cancel', value: 'cancel'},
             ]}
             onSelect={item => {
-              if (item.value === 'confirm') handleConfirm();
+              if (item.value === 'mint') void handleMint();
               else onComplete();
             }}
           />
+          <Text dimColor>[Esc] back</Text>
         </Box>
       )}
     </Box>

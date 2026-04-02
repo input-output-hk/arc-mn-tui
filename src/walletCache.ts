@@ -1,17 +1,34 @@
-import {readFileSync, writeFileSync, mkdirSync, unlinkSync} from 'fs';
+import {readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, renameSync} from 'fs';
 import {homedir} from 'os';
 import {join}    from 'path';
 
 // XDG-compliant cache directory: $XDG_CACHE_HOME/mn-tui or ~/.cache/mn-tui
-const CACHE_DIR = join(
+export const CACHE_DIR = join(
   process.env['XDG_CACHE_HOME'] ?? join(homedir(), '.cache'),
   'mn-tui',
 );
 
+// ---------------------------------------------------------------------------
+// One-time migration: move old flat layout (~/.cache/mn-tui/{network}/*.state)
+// to the new sync-state sub-tree (~/.cache/mn-tui/sync-state/{network}/*.state).
+// Safe to run multiple times — skipped if the destination already exists.
+// ---------------------------------------------------------------------------
+const KNOWN_NETWORKS = ['mainnet', 'preprod', 'preview', 'undeployed'];
+for (const net of KNOWN_NETWORKS) {
+  const oldDir = join(CACHE_DIR, net);
+  const newDir = join(CACHE_DIR, 'sync-state', net);
+  try {
+    if (existsSync(oldDir) && !existsSync(newDir)) {
+      mkdirSync(join(CACHE_DIR, 'sync-state'), {recursive: true});
+      renameSync(oldDir, newDir);
+    }
+  } catch { /* non-fatal */ }
+}
+
 type WalletType = 'shielded' | 'unshielded' | 'dust';
 
 function statePath(network: string, address: string, type: WalletType): string {
-  return join(CACHE_DIR, network, `${address}-${type}.state`);
+  return join(CACHE_DIR, 'sync-state', network, `${address}-${type}.state`);
 }
 
 /**
@@ -50,7 +67,7 @@ export function clearWalletCache(network: string, address: string): void {
  */
 export function saveState(network: string, address: string, type: WalletType, state: string): void {
   try {
-    mkdirSync(join(CACHE_DIR, network), {recursive: true});
+    mkdirSync(join(CACHE_DIR, 'sync-state', network), {recursive: true});
     writeFileSync(statePath(network, address, type), state, 'utf8');
   } catch {
     // swallow — cache write failure is non-fatal

@@ -1,26 +1,47 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useRef} from 'react';
 import {Box, Text, useInput} from 'ink';
 import TextInput from 'ink-text-input';
 import {logger}  from '../logger.js';
+import type {LogEntry} from '../logger.js';
 
 type Mode = 'view' | 'rename';
 
+function entryColor(level: LogEntry['level']): string | undefined {
+  if (level === 'ERROR') return 'red';
+  if (level === 'WARN')  return 'yellow';
+  return undefined;
+}
+
+function formatEntry(e: LogEntry): string {
+  const time = e.ts ? e.ts.slice(11, 19) : '        ';
+  const lvl  = e.level ? e.level.padEnd(5) : 'INFO ';
+  const body = e.cause && e.cause !== e.msg ? `${e.msg}: ${e.cause}` : e.msg;
+  return `${time} [${lvl}] ${body}`;
+}
+
 export default function Logs() {
   const [mode,    setMode]    = useState<Mode>('view');
-  const [lines,   setLines]   = useState<string[]>([]);
+  const [lines,   setLines]   = useState<LogEntry[]>([]);
   const [draft,   setDraft]   = useState(logger.getPath());
   const [message, setMessage] = useState('');
+  const seenCountRef          = useRef(-1);
 
-
-  // Refresh log lines on mount and whenever we return to view mode.
-  useEffect(() => {
-    if (mode === 'view') setLines(logger.tail(40));
-  }, [mode]);
-
-  // Poll for new lines every 2 s while in view mode.
+  // Load on mount / return to view mode; capture the current lineCount.
   useEffect(() => {
     if (mode !== 'view') return;
-    const id = setInterval(() => setLines(logger.tail(40)), 2_000);
+    seenCountRef.current = logger.lineCount;
+    setLines(logger.tail(40));
+  }, [mode]);
+
+  // Poll every 2 s but only re-render when new entries have appeared.
+  useEffect(() => {
+    if (mode !== 'view') return;
+    const id = setInterval(() => {
+      if (logger.lineCount !== seenCountRef.current) {
+        seenCountRef.current = logger.lineCount;
+        setLines(logger.tail(40));
+      }
+    }, 2_000);
     return () => clearInterval(id);
   }, [mode]);
 
@@ -29,6 +50,7 @@ export default function Logs() {
     if (input === 'r') { setDraft(logger.getPath()); setMode('rename'); }
     if (input === 'c') {
       logger.clear();
+      seenCountRef.current = 0;
       setLines([]);
       setMessage('Log cleared.');
       setTimeout(() => setMessage(''), 2_000);
@@ -71,12 +93,11 @@ export default function Logs() {
       <Box flexDirection="column" borderStyle="single" paddingX={1}>
         {lines.length === 0
           ? <Text dimColor>(log is empty)</Text>
-          : lines.map((l, i) => {
-              const color = l.includes('[ERROR]') ? 'red'
-                          : l.includes('[WARN]')  ? 'yellow'
-                          : undefined;
-              return <Text key={i} color={color} wrap="truncate">{l}</Text>;
-            })
+          : lines.map((entry, i) => (
+              <Text key={i} color={entryColor(entry.level)} wrap="truncate">
+                {formatEntry(entry)}
+              </Text>
+            ))
         }
       </Box>
 
