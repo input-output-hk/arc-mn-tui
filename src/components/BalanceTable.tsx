@@ -21,8 +21,8 @@ export default function BalanceTable({balances}: Props) {
   return (
     <Box flexDirection="column">
       <Box gap={2}>
-        <Text bold color="cyan" width={10}>Token</Text>
-        <Text bold color="cyan" width={8}>Type</Text>
+        <Box width={10}><Text bold color="cyan">Token</Text></Box>
+        <Box width={8}><Text bold color="cyan">Type</Text></Box>
         <Text bold color="cyan">Amount</Text>
       </Box>
       <Box>
@@ -30,8 +30,8 @@ export default function BalanceTable({balances}: Props) {
       </Box>
       {balances.map(b => (
         <Box key={`${b.symbol}-${b.kind}`} gap={2}>
-          <Text bold width={10}>{b.symbol}</Text>
-          <Text dimColor width={8}>{b.kind}</Text>
+          <Box width={10}><Text bold>{b.symbol}</Text></Box>
+          <Box width={8}><Text dimColor>{b.kind}</Text></Box>
           <Text>{formatAmount(b.amount, b.decimals)}</Text>
         </Box>
       ))}

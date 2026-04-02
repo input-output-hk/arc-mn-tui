@@ -16,19 +16,19 @@ export default function DustMonitor({dust}: Props) {
     <Box flexDirection="column" gap={0}>
       <Text bold color="cyan">DUST Generation</Text>
       <Box gap={2}>
-        <Text dimColor width={20}>Designated NIGHT</Text>
+        <Box width={20}><Text dimColor>Designated NIGHT</Text></Box>
         <Text>{fmt(dust.designated)} NIGHT</Text>
       </Box>
       <Box gap={2}>
-        <Text dimColor width={20}>Accrued DUST</Text>
+        <Box width={20}><Text dimColor>Accrued DUST</Text></Box>
         <Text color="green">{fmt(dust.accrued)} DUST</Text>
       </Box>
       <Box gap={2}>
-        <Text dimColor width={20}>Rate (per epoch)</Text>
+        <Box width={20}><Text dimColor>Rate (per epoch)</Text></Box>
         <Text>{fmt(dust.generationRate)} DUST</Text>
       </Box>
       <Box gap={2}>
-        <Text dimColor width={20}>Next epoch at block</Text>
+        <Box width={20}><Text dimColor>Next epoch at block</Text></Box>
         <Text>{dust.nextEpoch}</Text>
       </Box>
     </Box>

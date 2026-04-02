@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {Box, Text} from 'ink';
+import {Box, Text, useInput} from 'ink';
 import TextInput  from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import TxStatusComponent from '../components/TxStatus.js';
@@ -27,6 +27,10 @@ export default function Send({onComplete}: Props) {
   const [recipient, setRecipient] = useState('');
   const [amount,    setAmount]    = useState('');
 
+  useInput((_, key) => {
+    if (txStatus.stage === 'confirmed' && key.return) onComplete();
+  });
+
   async function handleConfirm() {
     setStep('submitting');
     const params: SendParams = {recipient, amount, token};
@@ -39,9 +43,7 @@ export default function Send({onComplete}: Props) {
       <Box flexDirection="column" gap={1}>
         <TxStatusComponent status={txStatus} />
         {txStatus.stage === 'confirmed' && (
-          <Text color="green" onPress={onComplete}>
-            Press Enter to return to dashboard
-          </Text>
+          <Text color="green">Press Enter to return to dashboard</Text>
         )}
       </Box>
     );
