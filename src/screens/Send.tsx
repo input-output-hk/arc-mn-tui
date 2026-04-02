@@ -4,7 +4,6 @@ import TextInput                              from 'ink-text-input';
 import SelectInput                            from 'ink-select-input';
 import TxStatusComponent                      from '../components/TxStatus.js';
 import type {WalletSyncState, SendRequest}    from '../hooks/useWalletSync.js';
-import {useInputMode}                         from '../hooks/useInputMode.js';
 
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -93,11 +92,6 @@ export default function Send({onComplete, walletSync}: Props) {
   // Reset tx state when the screen is first shown.
   useEffect(() => { resetTx(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const {setInputActive} = useInputMode();
-  useEffect(() => {
-    setInputActive(step === 'recipient' || step === 'amount');
-    return () => setInputActive(false);
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle Enter after a terminal tx state.
   useInput((_, key) => {

@@ -13,7 +13,6 @@ import type {Screen, NetworkConfig} from './types.js';
 import {loadConfig, saveConfig}    from './config.js';
 import {useWallet}                  from './hooks/useWallet.js';
 import {useWalletSync}              from './hooks/useWalletSync.js';
-import {InputModeContext}           from './hooks/useInputMode.js';
 import {logger}                    from './logger.js';
 import pkg                         from '../package.json';
 
@@ -26,7 +25,6 @@ export default function App() {
   const [paused,            setPaused]           = useState(false);
   const [issueCount,        setIssueCount]       = useState(() => logger.issueCount);
   const [lastSeenIssueCount, setLastSeenIssueCount] = useState(() => logger.issueCount);
-  const [inputActive,       setInputActive]      = useState(false);
   const [menuActive,        setMenuActive]       = useState(false);
 
   const {activeIndex, getMnemonic} = useWallet();
@@ -60,7 +58,6 @@ export default function App() {
   };
 
   return (
-    <InputModeContext.Provider value={{inputActive, setInputActive}}>
     <Box flexDirection="column" height={stdout.rows}>
 
       {/* Title bar */}
@@ -110,6 +107,5 @@ export default function App() {
       </Box>
 
     </Box>
-    </InputModeContext.Provider>
   );
 }

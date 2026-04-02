@@ -1,4 +1,4 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState} from 'react';
 import {Box, Text} from 'ink';
 import TextInput   from 'ink-text-input';
 import SelectInput from 'ink-select-input';
@@ -6,7 +6,6 @@ import TxStatusComponent from '../components/TxStatus.js';
 import DustMonitor       from '../components/DustMonitor.js';
 import {useDust}         from '../hooks/useDust.js';
 import type {WalletSyncState} from '../hooks/useWalletSync.js';
-import {useInputMode} from '../hooks/useInputMode.js';
 
 type Step = 'view' | 'amount' | 'confirm' | 'submitting';
 
@@ -21,11 +20,6 @@ export default function Designate({onComplete, walletSync}: Props) {
   const [step,   setStep]   = useState<Step>('view');
   const [amount, setAmount] = useState('');
 
-  const {setInputActive} = useInputMode();
-  useEffect(() => {
-    setInputActive(step === 'amount');
-    return () => setInputActive(false);
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleConfirm() {
     setStep('submitting');
