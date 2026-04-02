@@ -6,10 +6,11 @@ export type Screen =
   | 'network'
   | 'dashboard'
   | 'send'
-  | 'mint'
+  | 'contract'
   | 'deploy'
-  | 'keys'
+  | 'mint'
   | 'designate'
+  | 'keys'
   | 'logs';
 
 // ---------------------------------------------------------------------------

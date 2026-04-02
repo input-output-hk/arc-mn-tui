@@ -5,6 +5,7 @@ import Dashboard from './screens/Dashboard.js';
 import Network   from './screens/Network.js';
 import Send      from './screens/Send.js';
 import Mint      from './screens/Mint.js';
+import Contract  from './screens/Contract.js';
 import Deploy    from './screens/Deploy.js';
 import Keys      from './screens/Keys.js';
 import Designate from './screens/Designate.js';
@@ -95,6 +96,7 @@ export default function App() {
         {screen === 'dashboard' && <Dashboard network={network} paused={paused} walletSync={walletSync} />}
         {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} />}
         {screen === 'mint'      && <Mint      onComplete={toDash} walletSync={walletSync} />}
+        {screen === 'contract'  && <Contract  network={network} />}
         {screen === 'deploy'    && <Deploy    onComplete={toDash} walletSync={walletSync} />}
         {screen === 'keys'      && <Keys network={network} />}
         {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} />}

@@ -6,11 +6,12 @@ const SCREEN_ITEMS: {key: string; label: string; screen: Screen}[] = [
   {key: '0', label: 'Network',   screen: 'network'},
   {key: '1', label: 'Dashboard', screen: 'dashboard'},
   {key: '2', label: 'Send',      screen: 'send'},
-  {key: '3', label: 'Deploy',    screen: 'deploy'},
-  {key: '4', label: 'Mint',      screen: 'mint'},
-  {key: '5', label: 'Designate', screen: 'designate'},
-  {key: '6', label: 'Keys',      screen: 'keys'},
-  {key: '7', label: 'Logs',      screen: 'logs'},
+  {key: '3', label: 'Contract',  screen: 'contract'},
+  {key: '4', label: 'Deploy',    screen: 'deploy'},
+  {key: '5', label: 'Mint',      screen: 'mint'},
+  {key: '6', label: 'Designate', screen: 'designate'},
+  {key: '7', label: 'Keys',      screen: 'keys'},
+  {key: '8', label: 'Logs',      screen: 'logs'},
 ];
 
 interface Props {
@@ -23,7 +24,7 @@ interface Props {
 
 export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, onMenuToggle}: Props) {
   useInput((input) => {
-    if (/^[0-7]$/.test(input)) {
+    if (/^[0-8]$/.test(input)) {
       onNavigate(SCREEN_ITEMS[parseInt(input, 10)].screen);
       onMenuToggle();
     }
@@ -51,7 +52,7 @@ export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, on
           )}
         </Box>
       ))}
-      <Text dimColor>{menuActive ? '[0-7 navigate]' : '[M-m]'}</Text>
+      <Text dimColor>{menuActive ? '[0-8 navigate]' : '[M-m]'}</Text>
     </Box>
   );
 }
