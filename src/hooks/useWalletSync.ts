@@ -25,10 +25,24 @@ import type { NetworkConfig }                            from '../types.js';
 // Public types
 // ---------------------------------------------------------------------------
 
+export interface DustGeneration {
+  /** Raw NIGHT units backing DUST generation (÷ 10^6 = displayed NIGHT). */
+  designated: bigint;
+  /** Raw DUST generated per day (÷ 10^15 = displayed DUST/day). */
+  ratePerDay: bigint;
+  /** Raw DUST maximum cap across all registered UTXOs (÷ 10^15 = displayed DUST). */
+  limit:      bigint;
+  /** Latest maxCapReachedAt across all registered UTXOs (when last coin fills). */
+  fillTime:   Date;
+  /** Number of registered NIGHT UTXOs. */
+  numUtxos:   number;
+}
+
 export interface WalletBalances {
-  shielded:   Record<string, bigint>;
-  unshielded: Record<string, bigint>;
-  dust:       bigint;
+  shielded:        Record<string, bigint>;
+  unshielded:      Record<string, bigint>;
+  dust:            bigint;
+  dustGeneration:  DustGeneration | null;
 }
 
 export interface WalletSyncState {
@@ -133,16 +147,20 @@ export function useWalletSync(
 
         if (cancelled) { await facade.stop(); return; }
 
+        // Dust protocol parameters — used to compute backing NIGHT from maxCap.
+        const dustParams = ledger.LedgerParameters.initialParameters().dust;
+
         // Throttle to at most one UI update per second, and skip re-renders when
-        // nothing visible changed.  Deliberately excludes dust.walletBalance()
-        // from the comparison — that is time-based and changes every millisecond.
+        // nothing visible changed.  Excludes dust.walletBalance() (time-based) and
+        // generatedNow (also time-based); uses coin count + pending count instead.
         const stateKey = (s: any): string => {
           const ser = (rec: Record<string, bigint>) =>
             Object.entries(rec as Record<string, bigint>)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([k, v]) => `${k}:${v}`)
               .join(',');
-          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}`;
+          const dustKey = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
+          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}`;
         };
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sub = (facade.state() as Rx.Observable<any>).pipe(
@@ -151,12 +169,34 @@ export function useWalletSync(
         ).subscribe({
           next: (s) => {
             if (cancelled || pausedRef.current) return;
+            const now   = new Date();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const coins = s.dust.availableCoinsWithFullInfo(now) as any[];
+            let limitRaw   = 0n;
+            let ratePerDay = 0n;
+            let fillTime   = new Date(0);
+            for (const coin of coins) {
+              limitRaw   += coin.maxCap as bigint;
+              ratePerDay += (coin.rate  as bigint) * 86_400n;
+              const cap: Date = coin.maxCapReachedAt as Date;
+              if (cap > fillTime) fillTime = cap;
+            }
+            const dustGeneration: DustGeneration | null = coins.length > 0 ? {
+              designated: dustParams.nightDustRatio > 0n
+                ? limitRaw / dustParams.nightDustRatio
+                : 0n,
+              ratePerDay,
+              limit:    limitRaw,
+              fillTime,
+              numUtxos: coins.length,
+            } : null;
             setState({
               synced:   s.isSynced === true,
               balances: {
-                shielded:   s.shielded.balances   as Record<string, bigint>,
-                unshielded: s.unshielded.balances  as Record<string, bigint>,
-                dust:       s.dust.walletBalance(new Date()) as bigint,
+                shielded:       s.shielded.balances   as Record<string, bigint>,
+                unshielded:     s.unshielded.balances  as Record<string, bigint>,
+                dust:           s.dust.walletBalance(now) as bigint,
+                dustGeneration,
               },
               error: null,
             });

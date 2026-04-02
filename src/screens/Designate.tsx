@@ -4,16 +4,18 @@ import TextInput   from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import TxStatusComponent from '../components/TxStatus.js';
 import DustMonitor       from '../components/DustMonitor.js';
-import {useDust} from '../hooks/useDust.js';
+import {useDust}         from '../hooks/useDust.js';
+import type {WalletSyncState} from '../hooks/useWalletSync.js';
 
 type Step = 'view' | 'amount' | 'confirm' | 'submitting';
 
 interface Props {
-  onComplete: () => void;
+  onComplete:  () => void;
+  walletSync:  WalletSyncState;
 }
 
-export default function Designate({onComplete}: Props) {
-  const {dust, txStatus, designate} = useDust();
+export default function Designate({onComplete, walletSync}: Props) {
+  const {txStatus, designate} = useDust();
 
   const [step,   setStep]   = useState<Step>('view');
   const [amount, setAmount] = useState('');
@@ -41,7 +43,10 @@ export default function Designate({onComplete}: Props) {
     <Box flexDirection="column" gap={1}>
       <Text bold color="cyan">Designate NIGHT for DUST Generation</Text>
 
-      <DustMonitor dust={dust} />
+      <DustMonitor
+        balance={walletSync.balances?.dust ?? null}
+        generation={walletSync.balances?.dustGeneration ?? null}
+      />
 
       {step === 'view' && (
         <SelectInput

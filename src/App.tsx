@@ -88,7 +88,7 @@ export default function App() {
         {screen === 'mint'      && <Mint      onComplete={toDash} />}
         {screen === 'deploy'    && <Deploy    onComplete={toDash} />}
         {screen === 'keys'      && <Keys network={network} />}
-        {screen === 'designate' && <Designate onComplete={toDash} />}
+        {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} />}
         {screen === 'logs'      && <Logs />}
       </Box>
 

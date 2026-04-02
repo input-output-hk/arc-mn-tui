@@ -3,7 +3,6 @@ import {Box, Text} from 'ink';
 import DustMonitor  from '../components/DustMonitor.js';
 import {useMidnightNode}  from '../hooks/useMidnightNode.js';
 import {useWallet}        from '../hooks/useWallet.js';
-import {useDust}          from '../hooks/useDust.js';
 import type {NetworkConfig} from '../types.js';
 import type {WalletSyncState} from '../hooks/useWalletSync.js';
 
@@ -76,7 +75,6 @@ const TOKEN_W = 66;
 export default function Dashboard({network, paused, walletSync}: Props) {
   const {node, error: nodeError}             = useMidnightNode(network.nodeUrl, 6_000, paused);
   const {activeWallet, activeIndex, getMnemonic} = useWallet();
-  const {dust}                               = useDust();
   const [clock, setClock]                    = useState(utcTime);
 
   const mnemonic = getMnemonic(activeIndex);
@@ -158,37 +156,37 @@ export default function Dashboard({network, paused, walletSync}: Props) {
           <Text dimColor>awaiting sync…</Text>
         ) : (
           <>
-            {Object.entries(balances.shielded).map(([tok, amt]) => (
-              <Box key={'s-' + tok} flexDirection="row">
-                <Box width={TYPE_W}><Text dimColor>shielded</Text></Box>
-                <Box width={TOKEN_W}><Text color="white">{tokenLabel(tok)}</Text></Box>
-                <Box flexGrow={1} justifyContent="flex-end">
-                  <Text color="white">{fmtAmount(tok, amt)}</Text>
+            {Object.entries(balances.unshielded)
+              .sort(([a], [b]) => a === NIGHT_ID ? -1 : b === NIGHT_ID ? 1 : a.localeCompare(b))
+              .map(([tok, amt]) => (
+                <Box key={'u-' + tok} flexDirection="row">
+                  <Box width={TYPE_W}><Text dimColor>unshielded</Text></Box>
+                  <Box width={TOKEN_W}><Text color="white">{tokenLabel(tok)}</Text></Box>
+                  <Box flexGrow={1} justifyContent="flex-end">
+                    <Text color="white">{fmtAmount(tok, amt)}</Text>
+                  </Box>
                 </Box>
-              </Box>
-            ))}
-            {Object.entries(balances.unshielded).map(([tok, amt]) => (
-              <Box key={'u-' + tok} flexDirection="row">
-                <Box width={TYPE_W}><Text dimColor>unshielded</Text></Box>
-                <Box width={TOKEN_W}><Text color="white">{tokenLabel(tok)}</Text></Box>
-                <Box flexGrow={1} justifyContent="flex-end">
-                  <Text color="white">{fmtAmount(tok, amt)}</Text>
+              ))}
+            {Object.entries(balances.shielded)
+              .sort(([a], [b]) => a === NIGHT_ID ? -1 : b === NIGHT_ID ? 1 : a.localeCompare(b))
+              .map(([tok, amt]) => (
+                <Box key={'s-' + tok} flexDirection="row">
+                  <Box width={TYPE_W}><Text dimColor>shielded</Text></Box>
+                  <Box width={TOKEN_W}><Text color="white">{tokenLabel(tok)}</Text></Box>
+                  <Box flexGrow={1} justifyContent="flex-end">
+                    <Text color="white">{fmtAmount(tok, amt)}</Text>
+                  </Box>
                 </Box>
-              </Box>
-            ))}
-            <Box flexDirection="row">
-              <Box width={TYPE_W}><Text dimColor>dust</Text></Box>
-              <Box width={TOKEN_W} />
-              <Box flexGrow={1} justifyContent="flex-end">
-                <Text color="white">{fmtDust(balances.dust)}</Text>
-              </Box>
-            </Box>
+              ))}
           </>
         )}
       </Box>
 
-      {/* DUST */}
-      <DustMonitor dust={dust} />
+      {/* DUST Generation */}
+      <DustMonitor
+        balance={walletSync.balances?.dust ?? null}
+        generation={walletSync.balances?.dustGeneration ?? null}
+      />
 
     </Box>
   );
