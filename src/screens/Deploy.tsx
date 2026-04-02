@@ -1,10 +1,11 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {Box, Text} from 'ink';
 import TextInput   from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import TxStatusComponent from '../components/TxStatus.js';
 import {useWallet} from '../hooks/useWallet.js';
 import type {DeployParams} from '../types.js';
+import {useInputMode} from '../hooks/useInputMode.js';
 
 type Step = 'path' | 'args' | 'confirm' | 'submitting';
 
@@ -18,6 +19,12 @@ export default function Deploy({onComplete}: Props) {
   const [step,         setStep]         = useState<Step>('path');
   const [contractPath, setContractPath] = useState('');
   const [initArgs,     setInitArgs]     = useState('');
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    setInputActive(step === 'path' || step === 'args');
+    return () => setInputActive(false);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleConfirm() {
     setStep('submitting');

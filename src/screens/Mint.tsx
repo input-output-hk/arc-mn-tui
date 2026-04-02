@@ -1,10 +1,11 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {Box, Text} from 'ink';
 import TextInput   from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import TxStatusComponent from '../components/TxStatus.js';
 import {useWallet} from '../hooks/useWallet.js';
 import type {MintParams} from '../types.js';
+import {useInputMode} from '../hooks/useInputMode.js';
 
 type Step = 'kind' | 'contract' | 'recipient' | 'amount' | 'confirm' | 'submitting';
 
@@ -16,6 +17,12 @@ export default function Mint({onComplete}: Props) {
   const {txStatus} = useWallet();
 
   const [step,            setStep]            = useState<Step>('kind');
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    setInputActive(['contract', 'recipient', 'amount'].includes(step));
+    return () => setInputActive(false);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
   const [shielded,        setShielded]        = useState(false);
   const [contractAddress, setContractAddress] = useState('');
   const [recipient,       setRecipient]       = useState('');

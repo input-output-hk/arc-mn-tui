@@ -1,10 +1,11 @@
-import React, {useState}              from 'react';
+import React, {useState, useEffect}   from 'react';
 import {Box, Text, useInput}           from 'ink';
 import Spinner                         from 'ink-spinner';
 import TextInput                       from 'ink-text-input';
 import {useWallet}                     from '../hooks/useWallet.js';
 import {deriveFromMnemonic, encryptMnemonic} from '../keys.js';
 import {clearWalletCache}              from '../walletCache.js';
+import {useInputMode}                  from '../hooks/useInputMode.js';
 import type {PersistedWallet}          from '../config.js';
 import type {NetworkConfig}            from '../types.js';
 
@@ -37,6 +38,13 @@ export default function Keys({network}: Props) {
   const [step,    setStep]   = useState<Step>({kind: 'list'});
   const [cursor,  setCursor] = useState(0);
   const [cleared, setCleared] = useState(false);
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    const textKinds = ['add-name', 'add-mnemonic', 'add-passphrase', 'unlock'];
+    setInputActive(textKinds.includes(step.kind));
+    return () => setInputActive(false);
+  }, [step.kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lastIdx = Math.max(0, wallets.length - 1);
   const clamp   = (n: number) => Math.max(0, Math.min(n, lastIdx));

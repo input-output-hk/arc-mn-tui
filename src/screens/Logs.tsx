@@ -2,6 +2,7 @@ import React, {useState, useEffect} from 'react';
 import {Box, Text, useInput} from 'ink';
 import TextInput from 'ink-text-input';
 import {logger}  from '../logger.js';
+import {useInputMode} from '../hooks/useInputMode.js';
 
 type Mode = 'view' | 'rename';
 
@@ -10,6 +11,12 @@ export default function Logs() {
   const [lines,   setLines]   = useState<string[]>([]);
   const [draft,   setDraft]   = useState(logger.getPath());
   const [message, setMessage] = useState('');
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    setInputActive(mode === 'rename');
+    return () => setInputActive(false);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh log lines on mount and whenever we return to view mode.
   useEffect(() => {

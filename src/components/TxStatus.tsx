@@ -1,6 +1,5 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import Spinner from 'ink-spinner';
 import type {TxStatus as TxStatusType} from '../types.js';
 
 interface Props {
@@ -15,7 +14,7 @@ export default function TxStatus({status}: Props) {
     case 'building':
       return (
         <Box gap={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text color="yellow">○</Text>
           <Text>Building transaction…</Text>
         </Box>
       );
@@ -23,7 +22,7 @@ export default function TxStatus({status}: Props) {
     case 'proving':
       return (
         <Box gap={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text color="yellow">○</Text>
           <Text>Generating ZK proof…</Text>
         </Box>
       );
@@ -31,16 +30,18 @@ export default function TxStatus({status}: Props) {
     case 'submitting':
       return (
         <Box gap={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text color="yellow">○</Text>
           <Text>Submitting to node…</Text>
         </Box>
       );
 
     case 'pending':
       return (
-        <Box gap={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
-          <Text>Pending — </Text>
+        <Box flexDirection="column">
+          <Box gap={1}>
+            <Text color="green">●</Text>
+            <Text>Submitted</Text>
+          </Box>
           <Text dimColor>{status.txHash}</Text>
         </Box>
       );

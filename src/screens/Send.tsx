@@ -1,50 +1,231 @@
-import React, {useState} from 'react';
-import {Box, Text, useInput} from 'ink';
-import TextInput  from 'ink-text-input';
-import SelectInput from 'ink-select-input';
-import TxStatusComponent from '../components/TxStatus.js';
-import {useWallet} from '../hooks/useWallet.js';
-import type {TokenKind, SendParams} from '../types.js';
+import React, {useState, useEffect, useMemo} from 'react';
+import {Box, Text, useInput}                 from 'ink';
+import TextInput                              from 'ink-text-input';
+import SelectInput                            from 'ink-select-input';
+import TxStatusComponent                      from '../components/TxStatus.js';
+import type {WalletSyncState, SendRequest}    from '../hooks/useWalletSync.js';
+import {useInputMode}                         from '../hooks/useInputMode.js';
 
-type Step = 'token' | 'recipient' | 'amount' | 'confirm' | 'submitting';
+// ---------------------------------------------------------------------------
+// Constants & helpers
+// ---------------------------------------------------------------------------
 
-interface Props {
-  onComplete: () => void;
+const NIGHT_ID = '0'.repeat(64);
+
+/** True for an opaque hex contract token (not the native NIGHT token). */
+function isRawToken(id: string): boolean {
+  return id.length >= 32 && id !== NIGHT_ID;
 }
 
-const TOKEN_ITEMS: {label: string; value: TokenKind}[] = [
-  {label: 'DUST        (shielded)',   value: 'DUST'},
-  {label: 'NIGHT       (unshielded)', value: 'NIGHT'},
-  {label: 'Unshielded token',         value: 'unshielded'},
-  {label: 'Shielded token',           value: 'shielded'},
-];
+function tokenLabel(id: string): string {
+  if (id === NIGHT_ID) return 'NIGHT';
+  // Truncate long hex IDs for display.
+  return id.length > 12 ? id.slice(0, 8) + '…' + id.slice(-4) : id;
+}
 
-export default function Send({onComplete}: Props) {
-  const {txStatus, send} = useWallet();
+/** Format raw bigint for display: 6 decimal places for NIGHT, integer for others. */
+function fmtAmount(id: string, raw: bigint): string {
+  if (isRawToken(id)) return String(raw);
+  const whole = raw / 1_000_000n;
+  const frac  = raw % 1_000_000n;
+  return `${whole}.${String(frac).padStart(6, '0')}`;
+}
 
-  const [step,      setStep]      = useState<Step>('token');
-  const [token,     setToken]     = useState<TokenKind>('NIGHT');
-  const [recipient, setRecipient] = useState('');
-  const [amount,    setAmount]    = useState('');
+/**
+ * Parse a user-entered amount string to raw bigint.
+ * NIGHT uses 6 implied decimal places; raw-token amounts are integers.
+ */
+function parseAmount(s: string, id: string): bigint {
+  s = s.trim();
+  if (isRawToken(id)) return BigInt(s);
+  const [whole, frac = ''] = s.split('.');
+  const f6 = frac.padEnd(6, '0').slice(0, 6);
+  if (!/^\d+$/.test(whole) || !/^\d+$/.test(f6)) throw new Error('invalid');
+  return BigInt(whole) * 1_000_000n + BigInt(f6);
+}
 
+function amtPlaceholder(id: string): string {
+  return isRawToken(id) ? '0' : '0.000000';
+}
+
+// ---------------------------------------------------------------------------
+// Local types
+// ---------------------------------------------------------------------------
+
+interface TokenChoice {
+  type:    'shielded' | 'unshielded';
+  tokenId: string;
+  label:   string;
+  max:     bigint;
+}
+
+interface Draft {
+  type:     'shielded' | 'unshielded';
+  tokenId:  string;
+  label:    string;
+  to:       string;
+  amount:   bigint;   // raw units
+  amtStr:   string;   // for display
+}
+
+type Step = 'list' | 'token' | 'recipient' | 'amount' | 'submitting';
+
+interface Props {
+  onComplete:  () => void;
+  walletSync:  WalletSyncState;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export default function Send({onComplete, walletSync}: Props) {
+  const {balances, txStatus, send, resetTx} = walletSync;
+
+  const [step,     setStep]    = useState<Step>('list');
+  const [drafts,   setDrafts]  = useState<Draft[]>([]);
+  const [choice,   setChoice]  = useState<TokenChoice | null>(null);
+  const [to,       setTo]      = useState('');
+  const [toError,  setToError] = useState('');
+  const [amtStr,   setAmtStr]  = useState('');
+  const [amtError, setAmtError] = useState('');
+
+  // Reset tx state when the screen is first shown.
+  useEffect(() => { resetTx(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    setInputActive(step === 'recipient' || step === 'amount');
+    return () => setInputActive(false);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle Enter after a terminal tx state.
   useInput((_, key) => {
-    if (txStatus.stage === 'confirmed' && key.return) onComplete();
+    if (step === 'submitting') {
+      if ((txStatus.stage === 'pending' || txStatus.stage === 'failed') && key.return) {
+        onComplete();
+      }
+      return;
+    }
+    if (key.escape) {
+      if (step === 'recipient' || step === 'amount') { setStep('token'); return; }
+      if (step === 'token')    { setStep('list'); return; }
+    }
   });
 
-  async function handleConfirm() {
-    setStep('submitting');
-    const params: SendParams = {recipient, amount, token};
-    // TODO: replace stub call in useWallet with real SDK transfer
-    await send(params);
+  // ── Available tokens (non-zero balances, unshielded before shielded, NIGHT first) ──
+
+  const available = useMemo((): TokenChoice[] => {
+    if (!balances) return [];
+    const tokens: TokenChoice[] = [];
+    const addGroup = (type: 'shielded' | 'unshielded', rec: Record<string, bigint>) => {
+      // NIGHT first, then other tokens alphabetically.
+      const sorted = Object.entries(rec).sort(([a], [b]) =>
+        a === NIGHT_ID ? -1 : b === NIGHT_ID ? 1 : a.localeCompare(b));
+      for (const [id, amt] of sorted) {
+        if (amt > 0n) tokens.push({
+          type, tokenId: id, max: amt,
+          label: `${tokenLabel(id)} (${type})`,
+        });
+      }
+    };
+    addGroup('unshielded', balances.unshielded);
+    addGroup('shielded',   balances.shielded);
+    return tokens;
+  }, [balances]);
+
+  // ── Action handlers ──
+
+  function startAddTransfer() {
+    setChoice(null);
+    setTo('');
+    setToError('');
+    setAmtStr('');
+    setAmtError('');
+    setStep('token');
   }
+
+  function handleTokenSelect(item: {value: string}) {
+    if (item.value === '__back__') { setStep('list'); return; }
+    const tok = available.find(t => t.type + ':' + t.tokenId === item.value);
+    if (!tok) return;
+    setChoice(tok);
+    setTo('');
+    setToError('');
+    setStep('recipient');
+  }
+
+  function handleRecipientSubmit(value: string) {
+    const addr = value.trim();
+    if (!addr) { setToError('Address is required.'); return; }
+    // Soft address-type hint (SDK will reject definitively on submit).
+    if (choice?.type === 'shielded' && !addr.includes('shield-addr')) {
+      setToError('Expected a shielded address (mn_shield-addr_…).');
+      return;
+    }
+    if (choice?.type === 'unshielded' && addr.includes('shield-addr')) {
+      setToError('Expected an unshielded address (mn_addr_…).');
+      return;
+    }
+    setToError('');
+    setAmtStr('');
+    setAmtError('');
+    setStep('amount');
+  }
+
+  function handleAmountSubmit(value: string) {
+    if (!choice) return;
+    try {
+      const raw = parseAmount(value, choice.tokenId);
+      if (raw <= 0n) { setAmtError('Amount must be positive.'); return; }
+      if (raw > choice.max) {
+        setAmtError(`Exceeds available balance (${fmtAmount(choice.tokenId, choice.max)}).`);
+        return;
+      }
+      setDrafts(prev => [...prev, {
+        type:    choice.type,
+        tokenId: choice.tokenId,
+        label:   choice.label,
+        to:      to.trim(),
+        amount:  raw,
+        amtStr:  fmtAmount(choice.tokenId, raw),
+      }]);
+      setStep('list');
+    } catch {
+      setAmtError('Invalid amount.');
+    }
+  }
+
+  async function handleSend() {
+    setStep('submitting');
+    const requests: SendRequest[] = drafts.map(d => ({
+      type:    d.type,
+      tokenId: d.tokenId,
+      amount:  d.amount,
+      to:      d.to,
+    }));
+    await send(requests);
+  }
+
+  // ── Render ──
 
   if (step === 'submitting') {
     return (
       <Box flexDirection="column" gap={1}>
         <TxStatusComponent status={txStatus} />
-        {txStatus.stage === 'confirmed' && (
-          <Text color="green">Press Enter to return to dashboard</Text>
+        {(txStatus.stage === 'pending' || txStatus.stage === 'failed') && (
+          <Text dimColor>Press Enter to return to dashboard.</Text>
         )}
+      </Box>
+    );
+  }
+
+  // Guard: wallet not ready.
+  if (!balances) {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold color="cyan">Send Tokens</Text>
+        <Text dimColor>{walletSync.error ?? 'Awaiting wallet sync…'}</Text>
       </Box>
     );
   }
@@ -52,77 +233,100 @@ export default function Send({onComplete}: Props) {
   return (
     <Box flexDirection="column" gap={1}>
       <Text bold color="cyan">Send Tokens</Text>
+      <Text dimColor>DUST is not directly transferable; only unshielded and shielded tokens are shown.</Text>
 
-      {/* Step 1 — token selection */}
-      {step === 'token' && (
-        <Box flexDirection="column">
-          <Text>Select token to send:</Text>
-          <SelectInput
-            items={TOKEN_ITEMS}
-            onSelect={item => { setToken(item.value); setStep('recipient'); }}
-          />
-        </Box>
-      )}
+      {/* ── List ─────────────────────────────────────────────────────── */}
+      {step === 'list' && (
+        <>
+          {/* Draft table */}
+          {drafts.length > 0 && (
+            <Box flexDirection="column">
+              <Text dimColor>Transfers to send:</Text>
+              {drafts.map((d, i) => (
+                <Box key={i} gap={2}>
+                  <Box width={3}><Text dimColor>{i + 1}.</Text></Box>
+                  <Box width={22}><Text color="white">{d.label}</Text></Box>
+                  <Box width={48}><Text color="white" wrap="truncate">{d.to}</Text></Box>
+                  <Text color="white">{d.amtStr}</Text>
+                </Box>
+              ))}
+            </Box>
+          )}
 
-      {/* Step 2 — recipient address */}
-      {step === 'recipient' && (
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>Token: <Text color="white">{token}</Text></Text>
-          <Box gap={1}>
-            <Text>Recipient address: </Text>
-            <TextInput
-              value={recipient}
-              onChange={setRecipient}
-              onSubmit={() => setStep('amount')}
-              placeholder="0x… or shielded address"
-            />
-          </Box>
-        </Box>
-      )}
-
-      {/* Step 3 — amount */}
-      {step === 'amount' && (
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>Token: <Text color="white">{token}</Text></Text>
-          <Text dimColor>To:    <Text color="white">{recipient}</Text></Text>
-          <Box gap={1}>
-            <Text>Amount: </Text>
-            <TextInput
-              value={amount}
-              onChange={setAmount}
-              onSubmit={() => setStep('confirm')}
-              placeholder="0.000000"
-            />
-          </Box>
-        </Box>
-      )}
-
-      {/* Step 4 — confirmation */}
-      {step === 'confirm' && (
-        <Box flexDirection="column" gap={1}>
-          <Text bold>Confirm transaction</Text>
-          <Box gap={2}>
-            <Text dimColor>Token</Text>
-            <Text>{token}</Text>
-          </Box>
-          <Box gap={2}>
-            <Text dimColor>To   </Text>
-            <Text>{recipient}</Text>
-          </Box>
-          <Box gap={2}>
-            <Text dimColor>Amount</Text>
-            <Text>{amount}</Text>
-          </Box>
           <SelectInput
             items={[
-              {label: 'Confirm and send', value: 'confirm'},
-              {label: 'Cancel',          value: 'cancel'},
+              ...(drafts.length > 0
+                ? [{label: `Confirm & send (${drafts.length} transfer${drafts.length > 1 ? 's' : ''})`, value: 'send'}]
+                : []),
+              {label: available.length > 0 ? 'Add transfer' : 'Add transfer (no tokens available)', value: 'add'},
+              {label: 'Back to dashboard', value: 'back'},
             ]}
             onSelect={item => {
-              if (item.value === 'confirm') handleConfirm();
-              else onComplete();
+              if (item.value === 'send')  { void handleSend(); }
+              else if (item.value === 'add' && available.length > 0) startAddTransfer();
+              else if (item.value === 'back') onComplete();
             }}
           />
+        </>
+      )}
+
+      {/* ── Token selection ───────────────────────────────────────────── */}
+      {step === 'token' && (
+        <Box flexDirection="column" gap={1}>
+          <Text>Select token to send:</Text>
+          {available.length === 0 ? (
+            <Text color="yellow">No tokens available to send.</Text>
+          ) : (
+            <SelectInput
+              items={[
+                ...available.map(t => ({
+                  label: `${t.label.padEnd(28)} ${fmtAmount(t.tokenId, t.max)} available`,
+                  value: t.type + ':' + t.tokenId,
+                })),
+                {label: '← Back', value: '__back__'},
+              ]}
+              onSelect={handleTokenSelect}
+            />
+          )}
+          <Text dimColor>[Esc] back</Text>
+        </Box>
+      )}
+
+      {/* ── Recipient ─────────────────────────────────────────────────── */}
+      {step === 'recipient' && choice && (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Token: <Text color="white">{choice.label}</Text></Text>
+          <Box gap={1}>
+            <Text>Recipient address:</Text>
+            <TextInput
+              value={to}
+              onChange={v => { setTo(v); setToError(''); }}
+              onSubmit={handleRecipientSubmit}
+              placeholder={choice.type === 'shielded' ? 'mn_shield-addr_…' : 'mn_addr_…'}
+            />
+          </Box>
+          {toError && <Text color="red">{toError}</Text>}
+          <Text dimColor>[Esc] back  [Enter] continue</Text>
+        </Box>
+      )}
+
+      {/* ── Amount ────────────────────────────────────────────────────── */}
+      {step === 'amount' && choice && (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Token:     <Text color="white">{choice.label}</Text></Text>
+          <Text dimColor>Recipient: <Text color="white" wrap="truncate">{to}</Text></Text>
+          <Box gap={1}>
+            <Text>Amount{isRawToken(choice.tokenId) ? '' : ' (NIGHT)'}:</Text>
+            <TextInput
+              value={amtStr}
+              onChange={v => { setAmtStr(v); setAmtError(''); }}
+              onSubmit={handleAmountSubmit}
+              placeholder={amtPlaceholder(choice.tokenId)}
+            />
+          </Box>
+          <Text dimColor>Available: <Text color="white">{fmtAmount(choice.tokenId, choice.max)}</Text></Text>
+          {amtError && <Text color="red">{amtError}</Text>}
+          <Text dimColor>[Esc] back  [Enter] add to transfer list</Text>
         </Box>
       )}
     </Box>

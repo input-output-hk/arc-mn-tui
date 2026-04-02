@@ -121,6 +121,9 @@ export interface SendParams {
   token:     TokenKind;
 }
 
+// Re-exported for convenience; canonical definition is in useWalletSync.
+export type { SendRequest } from './hooks/useWalletSync.js';
+
 export interface MintParams {
   contractAddress: string;
   recipient:       string;

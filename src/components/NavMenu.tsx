@@ -14,19 +14,29 @@ const SCREEN_ITEMS: {key: string; label: string; screen: Screen}[] = [
 ];
 
 interface Props {
-  current:     Screen;
-  onNavigate:  (screen: Screen) => void;
-  hasNewLogs:  boolean;
+  current:      Screen;
+  onNavigate:   (screen: Screen) => void;
+  hasNewLogs:   boolean;
+  menuActive:   boolean;
+  onMenuToggle: () => void;
 }
 
-export default function NavMenu({current, onNavigate, hasNewLogs}: Props) {
+export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, onMenuToggle}: Props) {
   useInput((input) => {
-    const item = SCREEN_ITEMS.find(i => i.key === input);
-    if (item) onNavigate(item.screen);
-  });
+    if (/^[0-7]$/.test(input)) {
+      onNavigate(SCREEN_ITEMS[parseInt(input, 10)].screen);
+      onMenuToggle();
+    }
+  }, {isActive: menuActive});
 
   return (
-    <Box borderStyle="single" paddingX={1} gap={2} flexWrap="wrap">
+    <Box
+      borderStyle="single"
+      borderColor={menuActive ? 'cyan' : undefined}
+      paddingX={1}
+      gap={2}
+      flexWrap="wrap"
+    >
       {SCREEN_ITEMS.map(({key, label, screen}) => (
         <Box key={screen} gap={0}>
           <Text
@@ -34,13 +44,14 @@ export default function NavMenu({current, onNavigate, hasNewLogs}: Props) {
             color={current === screen ? 'cyan' : undefined}
             dimColor={current !== screen}
           >
-            [{key}] {label}
+            {key}:{label}
           </Text>
           {screen === 'logs' && hasNewLogs && current !== 'logs' && (
             <Text color="yellow"> ●</Text>
           )}
         </Box>
       ))}
+      <Text dimColor>{menuActive ? '[0-7 navigate]' : '[M-m]'}</Text>
     </Box>
   );
 }

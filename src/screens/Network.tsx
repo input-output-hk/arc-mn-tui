@@ -1,9 +1,10 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {Box, Text} from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput   from 'ink-text-input';
 import type {NetworkConfig, NetworkName} from '../types.js';
 import {NETWORK_DEFAULTS} from '../types.js';
+import {useInputMode} from '../hooks/useInputMode.js';
 
 type Step = 'name' | 'nodeUrl' | 'indexerUrl' | 'proofServerUrl' | 'confirm';
 
@@ -26,6 +27,12 @@ export default function Network({current, onSave, onComplete}: Props) {
   const [nodeUrl,        setNodeUrl]        = useState(current.nodeUrl);
   const [indexerUrl,     setIndexerUrl]     = useState(current.indexerUrl);
   const [proofServerUrl, setProofServerUrl] = useState(current.proofServerUrl);
+
+  const {setInputActive} = useInputMode();
+  useEffect(() => {
+    setInputActive(step !== 'name' && step !== 'confirm');
+    return () => setInputActive(false);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleNameSelect(item: {value: NetworkName}) {
     const n = item.value;

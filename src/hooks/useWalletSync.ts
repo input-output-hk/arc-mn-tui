@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef }                  from 'react';
+import { useState, useEffect, useRef, useCallback }     from 'react';
 import { Buffer }                                        from 'buffer';
 import { WebSocket }                                     from 'ws';
 import * as Rx                                           from 'rxjs';
@@ -15,7 +15,7 @@ import {
 }                                                        from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
-import type { NetworkConfig }                            from '../types.js';
+import type { NetworkConfig, TxStatus }                  from '../types.js';
 import { loadState, saveState, deleteState }             from '../walletCache.js';
 import { logger }                                       from '../logger.js';
 
@@ -47,13 +47,29 @@ export interface WalletBalances {
   dustGeneration:  DustGeneration | null;
 }
 
+/** A single output within a transfer transaction. */
+export interface SendRequest {
+  type:    'shielded' | 'unshielded';
+  /** Hex token ID; NIGHT = '0'.repeat(64). */
+  tokenId: string;
+  /** Raw amount (no decimal scaling). */
+  amount:  bigint;
+  /** Recipient Bech32 address. */
+  to:      string;
+}
+
 export interface WalletSyncState {
   synced:   boolean;
   balances: WalletBalances | null;
   error:    string | null;
+  txStatus: TxStatus;
+  send:     (requests: SendRequest[]) => Promise<void>;
+  resetTx:  () => void;
 }
 
-const IDLE: WalletSyncState = { synced: false, balances: null, error: null };
+// Internal sync-only slice; txStatus/send/resetTx are composed at return time.
+type SyncCore = { synced: boolean; balances: WalletBalances | null; error: string | null };
+const SYNC_IDLE: SyncCore = { synced: false, balances: null, error: null };
 
 // ---------------------------------------------------------------------------
 // URL helpers
@@ -78,7 +94,21 @@ export function useWalletSync(
   network:  NetworkConfig,
   paused  = false,
 ): WalletSyncState {
-  const [state, setState] = useState<WalletSyncState>(IDLE);
+  const [syncState, setSyncState] = useState<SyncCore>(SYNC_IDLE);
+  const [txStatus,  setTxStatus]  = useState<TxStatus>({stage: 'idle'});
+
+  // Refs for wallet internals — accessible from stable send callback without
+  // restarting the wallet subscription.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const facadeRef       = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const shieldedKeysRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dustKeyRef      = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const keystoreRef     = useRef<any>(null);
+  const walletAddrRef   = useRef<string | null>(null);
+
   // Track paused via ref so the subscription callback sees the latest value
   // without needing to restart the wallet.
   const pausedRef = useRef(paused);
@@ -86,7 +116,7 @@ export function useWalletSync(
 
   useEffect(() => {
     if (!mnemonic) {
-      setState(IDLE);
+      setSyncState(SYNC_IDLE);
       return;
     }
 
@@ -193,6 +223,13 @@ export function useWalletSync(
         facade = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
         await facade.start(shieldedSecretKeys, dustSecretKey);
 
+        // Expose for the stable send() callback.
+        facadeRef.current       = facade;
+        shieldedKeysRef.current = shieldedSecretKeys;
+        dustKeyRef.current      = dustSecretKey;
+        keystoreRef.current     = unshieldedKeystore;
+        walletAddrRef.current   = unshieldedAddr;
+
         if (cancelled) { await facade.stop(); return; }
 
         // Dust protocol parameters — used to compute backing NIGHT from maxCap.
@@ -257,7 +294,7 @@ export function useWalletSync(
               fillTime,
               numUtxos: coins.length,
             } : null;
-            setState({
+            setSyncState({
               synced:   s.isSynced === true,
               balances: {
                 shielded:       s.shielded.balances   as Record<string, bigint>,
@@ -269,14 +306,14 @@ export function useWalletSync(
             });
           },
           error: (e: unknown) => {
-            if (!cancelled) setState({
+            if (!cancelled) setSyncState({
               synced: false, balances: null,
               error: e instanceof Error ? e.message : String(e),
             });
           },
         });
       } catch (e) {
-        if (!cancelled) setState({
+        if (!cancelled) setSyncState({
           synced: false, balances: null,
           error: e instanceof Error ? e.message : String(e),
         });
@@ -288,6 +325,11 @@ export function useWalletSync(
     return () => {
       cancelled = true;
       sub?.unsubscribe();
+      facadeRef.current       = null;
+      shieldedKeysRef.current = null;
+      dustKeyRef.current      = null;
+      keystoreRef.current     = null;
+      walletAddrRef.current   = null;
       if (facade) {
         // Best-effort: persist current state before stopping so the next launch
         // can resume from this point.  facade.stop() runs regardless.
@@ -296,5 +338,67 @@ export function useWalletSync(
     };
   }, [mnemonic, network.name, network.indexerUrl, network.nodeUrl, network.proofServerUrl]);
 
-  return state;
+  // ---------------------------------------------------------------------------
+  // Send
+  // ---------------------------------------------------------------------------
+
+  const resetTx = useCallback(() => setTxStatus({stage: 'idle'}), []);
+
+  const send = useCallback(async (requests: SendRequest[]): Promise<void> => {
+    const f  = facadeRef.current;
+    const sk = shieldedKeysRef.current;
+    const dk = dustKeyRef.current;
+    const ks = keystoreRef.current;
+    if (!f || !sk || !dk || !ks) {
+      setTxStatus({stage: 'failed', error: 'Wallet not connected'});
+      return;
+    }
+    try {
+      setTxStatus({stage: 'building'});
+
+      // Group outputs by transfer type for the SDK.
+      const grouped = new Map<string, {type: string; amount: bigint; receiverAddress: string}[]>();
+      for (const r of requests) {
+        const out = grouped.get(r.type) ?? [];
+        out.push({type: r.tokenId, amount: r.amount, receiverAddress: r.to});
+        grouped.set(r.type, out);
+      }
+      const transfers = [...grouped.entries()].map(([type, outputs]) => ({type, outputs}));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const recipe = await (f as any).transferTransaction(
+        transfers,
+        {shieldedSecretKeys: sk, dustSecretKey: dk},
+        {ttl: new Date(Date.now() + 30 * 60 * 1000)},
+      );
+
+      setTxStatus({stage: 'proving'});
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const signed = await (f as any).signRecipe(recipe, (payload: Uint8Array) => ks.signData(payload));
+
+      setTxStatus({stage: 'submitting'});
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const finalized = await (f as any).finalizeRecipe(signed);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txHash = await (f as any).submitTransaction(finalized) as string;
+
+      setTxStatus({stage: 'pending', txHash});
+
+      // Log the completed transfer for audit purposes.
+      const from = walletAddrRef.current ?? 'unknown';
+      for (const r of requests) {
+        const night_id = '0'.repeat(64);
+        const amtDisplay = r.tokenId === night_id
+          ? `${r.amount / 1_000_000n}.${String(r.amount % 1_000_000n).padStart(6, '0')} NIGHT`
+          : `${r.amount} ${r.tokenId.slice(0, 8)}…`;
+        logger.info(
+          `Transfer: ${amtDisplay} (${r.type}) from ${from} to ${r.to} | txHash: ${txHash}`,
+        );
+      }
+    } catch (e) {
+      setTxStatus({stage: 'failed', error: e instanceof Error ? e.message : String(e)});
+    }
+  }, []);
+
+  return { ...syncState, txStatus, send, resetTx };
 }

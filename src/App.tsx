@@ -13,6 +13,7 @@ import type {Screen, NetworkConfig} from './types.js';
 import {loadConfig, saveConfig}    from './config.js';
 import {useWallet}                  from './hooks/useWallet.js';
 import {useWalletSync}              from './hooks/useWalletSync.js';
+import {InputModeContext}           from './hooks/useInputMode.js';
 import {logger}                    from './logger.js';
 import pkg                         from '../package.json';
 
@@ -25,6 +26,8 @@ export default function App() {
   const [paused,            setPaused]           = useState(false);
   const [issueCount,        setIssueCount]       = useState(() => logger.issueCount);
   const [lastSeenIssueCount, setLastSeenIssueCount] = useState(() => logger.issueCount);
+  const [inputActive,       setInputActive]      = useState(false);
+  const [menuActive,        setMenuActive]       = useState(false);
 
   const {activeIndex, getMnemonic} = useWallet();
   const mnemonic   = getMnemonic(activeIndex);
@@ -39,9 +42,11 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  useInput((input) => {
+  useInput((input, key) => {
+    if (!key.meta) return;
     if (input === 'q') { exit(); return; }
     if (input === 'p') { setPaused(p => !p); return; }
+    if (input === 'm') { setMenuActive(a => !a); return; }
   });
 
   const navigate = (s: Screen) => {
@@ -55,6 +60,7 @@ export default function App() {
   };
 
   return (
+    <InputModeContext.Provider value={{inputActive, setInputActive}}>
     <Box flexDirection="column" height={stdout.rows}>
 
       {/* Title bar */}
@@ -67,12 +73,18 @@ export default function App() {
         </Box>
         <Box gap={2}>
           {paused && <Text color="yellow">PAUSED</Text>}
-          <Text dimColor>p — {paused ? 'resume' : 'pause'}  q — exit</Text>
+          <Text dimColor>M-m — menu  M-p — {paused ? 'resume' : 'pause'}  M-q — exit</Text>
         </Box>
       </Box>
 
       {/* Navigation */}
-      <NavMenu current={screen} onNavigate={navigate} hasNewLogs={issueCount > lastSeenIssueCount} />
+      <NavMenu
+        current={screen}
+        onNavigate={navigate}
+        hasNewLogs={issueCount > lastSeenIssueCount}
+        menuActive={menuActive}
+        onMenuToggle={() => setMenuActive(a => !a)}
+      />
 
       {/* Active screen */}
       <Box paddingX={2} paddingY={1} flexGrow={1}>
@@ -84,7 +96,7 @@ export default function App() {
           />
         )}
         {screen === 'dashboard' && <Dashboard network={network} paused={paused} walletSync={walletSync} />}
-        {screen === 'send'      && <Send      onComplete={toDash} />}
+        {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} />}
         {screen === 'mint'      && <Mint      onComplete={toDash} />}
         {screen === 'deploy'    && <Deploy    onComplete={toDash} />}
         {screen === 'keys'      && <Keys network={network} />}
@@ -98,5 +110,6 @@ export default function App() {
       </Box>
 
     </Box>
+    </InputModeContext.Provider>
   );
 }
