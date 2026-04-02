@@ -29,7 +29,7 @@ function utcTime(): string {
 
 export default function Dashboard({network}: Props) {
   const {node, error: nodeError} = useMidnightNode(network.nodeUrl);
-  const {wallet}                 = useWallet();
+  const {activeWallet, wallet}   = useWallet();
   const {dust}                   = useDust();
   const [clock, setClock]        = useState(utcTime);
 
@@ -76,9 +76,16 @@ export default function Dashboard({network}: Props) {
       {/* Wallet */}
       <Box flexDirection="column">
         <Text bold color="cyan">Wallet</Text>
-        {wallet.connected
-          ? <Text dimColor>{wallet.address}</Text>
-          : <Text color="yellow">Not connected — enter mnemonic in Keys screen (5)</Text>}
+        {activeWallet ? (
+          <>
+            <Text dimColor>name        <Text color="white">{activeWallet.name}</Text></Text>
+            <Text dimColor>unshielded  <Text color="white">{activeWallet.unshielded}</Text></Text>
+            <Text dimColor>shielded    <Text color="white">{activeWallet.shielded}</Text></Text>
+            <Text dimColor>dust        <Text color="white">{activeWallet.dust}</Text></Text>
+          </>
+        ) : (
+          <Text color="yellow">No wallet loaded — open Keys screen (5)</Text>
+        )}
         <BalanceTable balances={wallet.balances} />
       </Box>
 

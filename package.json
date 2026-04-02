@@ -5,21 +5,29 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.tsx",
-    "dev":   "tsx watch src/index.tsx",
+    "dev": "tsx watch src/index.tsx",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ink":            "^5.0.1",
+    "@midnight-ntwrk/ledger-v7": "7.0.0",
+    "@midnight-ntwrk/midnight-js-network-id": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-address-format": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-hd": "3.0.0",
+    "@midnight-ntwrk/wallet-sdk-runtime": "^1.0.0",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "^1.0.0",
+    "bip39": "^3.1.0",
+    "ink": "^5.0.1",
     "ink-select-input": "^6.0.0",
-    "ink-spinner":    "^5.0.0",
+    "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
-    "react":          "^18.3.1"
+    "openpgp": "^6.3.0",
+    "react": "^18.3.1"
   },
   "devDependencies": {
-    "@types/node":    "^22.0.0",
-    "@types/react":   "^18.3.1",
-    "tsx":            "^4.19.0",
-    "typescript":     "^5.7.0"
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

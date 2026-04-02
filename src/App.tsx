@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {Box, Text, useApp} from 'ink';
+import {Box, Text, useApp, useStdout} from 'ink';
 import NavMenu   from './components/NavMenu.js';
 import Dashboard from './screens/Dashboard.js';
 import Network   from './screens/Network.js';
@@ -10,10 +10,11 @@ import Keys      from './screens/Keys.js';
 import Designate from './screens/Designate.js';
 import Logs      from './screens/Logs.js';
 import type {Screen, NetworkConfig} from './types.js';
-import {loadConfig, saveConfig} from './config.js';
+import {loadConfig, saveConfig}    from './config.js';
 
 export default function App() {
-  const {exit} = useApp();
+  const {exit}   = useApp();
+  const {stdout} = useStdout();
 
   const [screen,  setScreen]  = useState<Screen>('dashboard');
   const [network, setNetwork] = useState<NetworkConfig>(() => loadConfig().network);
@@ -22,11 +23,11 @@ export default function App() {
   const toDash     = () => setScreen('dashboard');
   const applyNetwork = (cfg: NetworkConfig) => {
     setNetwork(cfg);
-    saveConfig({network: cfg});
+    saveConfig({...loadConfig(), network: cfg});
   };
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={stdout.rows}>
 
       {/* Title bar */}
       <Box borderStyle="single" paddingX={1} justifyContent="space-between">
@@ -54,7 +55,7 @@ export default function App() {
         {screen === 'send'      && <Send      onComplete={toDash} />}
         {screen === 'mint'      && <Mint      onComplete={toDash} />}
         {screen === 'deploy'    && <Deploy    onComplete={toDash} />}
-        {screen === 'keys'      && <Keys />}
+        {screen === 'keys'      && <Keys network={network} />}
         {screen === 'designate' && <Designate onComplete={toDash} />}
         {screen === 'logs'      && <Logs />}
       </Box>

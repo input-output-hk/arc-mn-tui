@@ -63,6 +63,13 @@ export interface TokenBalance {
   decimals: number;
 }
 
+export interface WalletEntry {
+  name:       string;
+  unshielded: string;
+  shielded:   string;
+  dust:       string;
+}
+
 export interface WalletState {
   address:   string;
   balances:  TokenBalance[];

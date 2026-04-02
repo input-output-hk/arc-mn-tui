@@ -1,77 +1,250 @@
-import React, {useState} from 'react';
-import {Box, Text} from 'ink';
-import TextInput from 'ink-text-input';
-import {useWallet} from '../hooks/useWallet.js';
+import React, {useState}              from 'react';
+import {Box, Text, useInput}           from 'ink';
+import Spinner                         from 'ink-spinner';
+import TextInput                       from 'ink-text-input';
+import {useWallet}                     from '../hooks/useWallet.js';
+import {deriveFromMnemonic, encryptMnemonic} from '../keys.js';
+import type {PersistedWallet}          from '../config.js';
+import type {NetworkConfig}            from '../types.js';
 
-type Step = 'input' | 'results';
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-export default function Keys() {
-  const {connect, deriveAddresses} = useWallet();
+interface Props { network: NetworkConfig; }
 
-  const [step,      setStep]      = useState<Step>('input');
-  const [mnemonic,  setMnemonic]  = useState('');
-  const [countStr,  setCountStr]  = useState('3');
-  const [addresses, setAddresses] = useState<
-    {index: number; shielded: string; unshielded: string}[]
-  >([]);
+type Step =
+  | {kind: 'list'}
+  | {kind: 'add-name';       draft:    string}
+  | {kind: 'add-mnemonic';   name:     string; draft: string}
+  | {kind: 'add-passphrase'; name:     string; mnemonic: string; draft: string}
+  | {kind: 'unlock';         idx:      number; draft: string}
+  | {kind: 'working';        msg:      string}
+  | {kind: 'error';          msg:      string};
 
-  async function handleSubmit() {
-    const count = Math.max(1, parseInt(countStr, 10) || 1);
-    // TODO: replace stubs with real derivation.
-    //   For Midnight:
-    //     - Parse mnemonic using a BIP-39 library.
-    //     - Derive spending keys and viewing keys using the Midnight SDK key
-    //       derivation API (separate from NEAR's Ed25519 hardened paths).
-    //     - Derive unshielded address (sr25519 / ss58 encoded).
-    //     - Derive shielded address (Midnight-specific encoding).
-    await connect(mnemonic);
-    const derived = deriveAddresses(mnemonic, count);
-    setAddresses(derived);
-    setStep('results');
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export default function Keys({network}: Props) {
+  const {
+    wallets, persisted, activeIndex,
+    addWallet, removeWallet, setActiveIndex,
+    isCached, unlockWallet,
+  } = useWallet();
+
+  const [step,   setStep]   = useState<Step>({kind: 'list'});
+  const [cursor, setCursor] = useState(0);
+
+  const lastIdx = Math.max(0, wallets.length - 1);
+  const clamp   = (n: number) => Math.max(0, Math.min(n, lastIdx));
+
+  // ---- global key handler -------------------------------------------------
+
+  useInput((input, key) => {
+    // Dismiss errors
+    if (step.kind === 'error') { setStep({kind: 'list'}); return; }
+
+    // Escape cancels any add-* step
+    if (key.escape && step.kind !== 'list') { setStep({kind: 'list'}); return; }
+
+    // List navigation
+    if (step.kind === 'list') {
+      if (key.upArrow)   { setCursor(c => clamp(c - 1)); return; }
+      if (key.downArrow) { setCursor(c => clamp(c + 1)); return; }
+      if (key.return && wallets.length > 0) {
+        const pw = persisted[cursor];
+        if (pw.encryptedMnemonic && !isCached(cursor)) {
+          setStep({kind: 'unlock', idx: cursor, draft: ''});
+        } else {
+          setActiveIndex(cursor);
+        }
+        return;
+      }
+      if (input === 'a') { setStep({kind: 'add-name', draft: ''}); return; }
+      if (input === 'x' && wallets.length > 0) {
+        const next = clamp(cursor === wallets.length - 1 ? cursor - 1 : cursor);
+        removeWallet(cursor);
+        setCursor(next);
+      }
+    }
+  });
+
+  // ---- submit handlers ----------------------------------------------------
+
+  function handleNameSubmit(value: string) {
+    const name = value.trim();
+    if (name) setStep({kind: 'add-mnemonic', name, draft: ''});
   }
+
+  function handleMnemonicSubmit(value: string) {
+    if (step.kind !== 'add-mnemonic') return;
+    const mnemonic = value.trim();
+    if (mnemonic) setStep({kind: 'add-passphrase', name: step.name, mnemonic, draft: ''});
+  }
+
+  function handlePassphraseSubmit(value: string) {
+    if (step.kind !== 'add-passphrase') return;
+    const passphrase = value.trim();
+    const {name, mnemonic} = step;
+    if (!passphrase) return;
+    setStep({kind: 'working', msg: 'Deriving addresses and encrypting…'});
+    void (async () => {
+      try {
+        const addrs            = await deriveFromMnemonic(mnemonic, network.name);
+        const encryptedMnemonic = await encryptMnemonic(mnemonic, passphrase);
+        const entry: PersistedWallet = {name, ...addrs, encryptedMnemonic};
+        addWallet(entry, mnemonic);
+        setCursor(wallets.length); // new wallet will be appended here
+        setStep({kind: 'list'});
+      } catch (e) {
+        setStep({kind: 'error', msg: e instanceof Error ? e.message : String(e)});
+      }
+    })();
+  }
+
+  function handleUnlockSubmit(value: string) {
+    if (step.kind !== 'unlock') return;
+    const passphrase = value.trim();
+    const idx        = step.idx;
+    if (!passphrase) return;
+    setStep({kind: 'working', msg: 'Decrypting…'});
+    void (async () => {
+      try {
+        await unlockWallet(idx, passphrase);
+        setActiveIndex(idx);
+        setCursor(idx);
+        setStep({kind: 'list'});
+      } catch {
+        setStep({kind: 'error', msg: 'Wrong passphrase or corrupt data.'});
+      }
+    })();
+  }
+
+  // ---- helpers ------------------------------------------------------------
+
+  function sourceLabel(pw: PersistedWallet, idx: number): string {
+    if (pw.encryptedMnemonic) return isCached(idx) ? 'unlocked' : 'encrypted';
+    return 'no mnemonic';
+  }
+
+  const active = wallets[activeIndex];
+
+  // ---- render -------------------------------------------------------------
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Text bold color="cyan">Key Derivation</Text>
+      <Text bold color="cyan">Keys</Text>
 
-      {step === 'input' && (
+      {/* ── List ──────────────────────────────────────────────────────── */}
+      {(step.kind === 'list' || step.kind === 'error') && (<>
+
+        <Text dimColor>[a] add  [x] delete  ↑↓ navigate  Enter unlock+activate</Text>
+
+        <Box flexDirection="column">
+          {wallets.length === 0
+            ? <Text dimColor>No wallets loaded — press [a] to add one.</Text>
+            : wallets.map((w, i) => (
+                <Text
+                  key={i}
+                  bold={i === cursor}
+                  color={i === cursor ? 'cyan' : undefined}
+                  dimColor={i !== cursor}
+                >
+                  {i === activeIndex ? '●' : '○'}{' '}
+                  {String(i).padStart(2)}{'  '}{w.name.padEnd(14)}
+                  <Text color={i === cursor ? 'white' : undefined}>
+                    {w.unshielded.slice(0, 22)}…
+                  </Text>
+                  {'  '}
+                  <Text dimColor>{sourceLabel(persisted[i], i)}</Text>
+                </Text>
+              ))
+          }
+        </Box>
+
+        {step.kind === 'error' && (
+          <Text color="red">⚠ {step.msg}  (press any key)</Text>
+        )}
+
+        {active && (
+          <Box flexDirection="column" borderStyle="single" paddingX={1}>
+            <Text bold color="cyan">{active.name}</Text>
+            <Text dimColor>unshielded  <Text color="white">{active.unshielded}</Text></Text>
+            <Text dimColor>shielded    <Text color="white">{active.shielded}</Text></Text>
+            <Text dimColor>dust        <Text color="white">{active.dust}</Text></Text>
+          </Box>
+        )}
+
+      </>)}
+
+      {/* ── Add: wallet name ──────────────────────────────────────────── */}
+      {step.kind === 'add-name' && (
         <Box flexDirection="column" gap={1}>
-          <Box gap={1}>
-            <Text>Mnemonic: </Text>
-            <TextInput
-              value={mnemonic}
-              onChange={setMnemonic}
-              onSubmit={() => { /* move to count field */ }}
-              mask="*"
-              placeholder="word1 word2 … word24"
-            />
-          </Box>
-          <Box gap={1}>
-            <Text>Address count: </Text>
-            <TextInput
-              value={countStr}
-              onChange={setCountStr}
-              onSubmit={handleSubmit}
-              placeholder="3"
-            />
-          </Box>
-          <Text dimColor>Press Enter on the count field to derive.</Text>
+          <Text>New wallet name:</Text>
+          <TextInput
+            value={step.draft}
+            onChange={d => setStep({...step, draft: d})}
+            onSubmit={handleNameSubmit}
+            placeholder="alice"
+          />
+          <Text dimColor>[Esc] cancel</Text>
         </Box>
       )}
 
-      {step === 'results' && (
+      {/* ── Add: mnemonic ─────────────────────────────────────────────── */}
+      {step.kind === 'add-mnemonic' && (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor>Mnemonic accepted. Derived {addresses.length} address(es):</Text>
-          {addresses.map(a => (
-            <Box key={a.index} flexDirection="column">
-              <Text bold>Index {a.index}</Text>
-              <Text dimColor>  Unshielded  <Text color="white">{a.unshielded}</Text></Text>
-              <Text dimColor>  Shielded    <Text color="white">{a.shielded}</Text></Text>
-            </Box>
-          ))}
-          <Text dimColor>Press 1 to return to dashboard.</Text>
+          <Text>Mnemonic for <Text color="cyan">{step.name}</Text>:</Text>
+          <TextInput
+            value={step.draft}
+            onChange={d => setStep({...step, draft: d})}
+            onSubmit={handleMnemonicSubmit}
+            mask="*"
+            placeholder="word1 word2 … word24"
+          />
+          <Text dimColor>24 space-separated words — Enter to continue.  [Esc] cancel</Text>
         </Box>
       )}
+
+      {/* ── Add: encryption passphrase ────────────────────────────────── */}
+      {step.kind === 'add-passphrase' && (
+        <Box flexDirection="column" gap={1}>
+          <Text>Encryption passphrase for <Text color="cyan">{step.name}</Text>:</Text>
+          <TextInput
+            value={step.draft}
+            onChange={d => setStep({...step, draft: d})}
+            onSubmit={handlePassphraseSubmit}
+            mask="*"
+            placeholder="strong passphrase"
+          />
+          <Text dimColor>Mnemonic will be stored encrypted (OpenPGP symmetric).  [Esc] cancel</Text>
+        </Box>
+      )}
+
+      {/* ── Unlock ────────────────────────────────────────────────────── */}
+      {step.kind === 'unlock' && (
+        <Box flexDirection="column" gap={1}>
+          <Text>Passphrase for <Text color="cyan">{wallets[step.idx]?.name ?? ''}</Text>:</Text>
+          <TextInput
+            value={step.draft}
+            onChange={d => setStep({...step, draft: d})}
+            onSubmit={handleUnlockSubmit}
+            mask="*"
+            placeholder="passphrase"
+          />
+          <Text dimColor>Decrypt mnemonic to activate wallet.  [Esc] cancel</Text>
+        </Box>
+      )}
+
+      {/* ── Working ───────────────────────────────────────────────────── */}
+      {step.kind === 'working' && (
+        <Box gap={1}>
+          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text>{step.msg}</Text>
+        </Box>
+      )}
+
     </Box>
   );
 }
