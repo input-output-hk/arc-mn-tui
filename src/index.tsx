@@ -7,7 +7,7 @@ import {WalletProvider} from './hooks/useWallet.js';
 // Print a startup indicator on the normal screen while modules load.
 // This line executes as soon as the entry point is parsed, so it appears
 // immediately even before React/Ink initialise.
-process.stdout.write('Starting Midnight TUI');
+process.stdout.write('Starting Midnight TUI . . .');
 const dotInterval = setInterval(() => process.stdout.write('.'), 300);
 
 // Small async trampoline so we can await the first render tick before

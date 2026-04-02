@@ -53,20 +53,20 @@ export default function DustMonitor({balance, generation}: Props) {
       ) : (
         <>
           <Box gap={2}>
-            <Box width={LBL_W}><Text dimColor>designated</Text></Box>
-            <Text color="white">{fmtNight(generation.designated)} NIGHT</Text>
+            <Box width={LBL_W}><Text dimColor>limit</Text></Box>
+            <Text color="white">{fmtDust(generation.limit)} DUST</Text>
           </Box>
           <Box gap={2}>
             <Box width={LBL_W}><Text dimColor>rate</Text></Box>
             <Text color="white">{fmtDust(generation.ratePerDay)} DUST/day</Text>
           </Box>
           <Box gap={2}>
-            <Box width={LBL_W}><Text dimColor>limit</Text></Box>
-            <Text color="white">{fmtDust(generation.limit)} DUST</Text>
-          </Box>
-          <Box gap={2}>
             <Box width={LBL_W}><Text dimColor>fill time</Text></Box>
             <Text color="white">{fmtFillTime(generation.fillTime)}</Text>
+          </Box>
+          <Box gap={2}>
+            <Box width={LBL_W}><Text dimColor>designated</Text></Box>
+            <Text color="white">{fmtNight(generation.designated)} NIGHT</Text>
           </Box>
           <Box gap={2}>
             <Box width={LBL_W}><Text dimColor>UTXOs</Text></Box>

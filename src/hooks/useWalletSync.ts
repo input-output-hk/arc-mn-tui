@@ -16,6 +16,8 @@ import {
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
 import type { NetworkConfig }                            from '../types.js';
+import { loadState, saveState }                         from '../walletCache.js';
+import { logger }                                       from '../logger.js';
 
 // Allow the wallet SDK to use WebSocket for GraphQL subscriptions.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,10 +90,11 @@ export function useWalletSync(
       return;
     }
 
-    let cancelled    = false;
+    let cancelled     = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let facade: any  = null;
+    let facade: any   = null;
     let sub: Rx.Subscription | null = null;
+    let persistState: (() => Promise<unknown[]>) | null = null;
 
     async function start() {
       try {
@@ -113,6 +116,9 @@ export function useWalletSync(
         const dustSecretKey      = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
         const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], network.name);
 
+        // Unshielded address — used as the cache key (deterministic, human-readable).
+        const unshieldedAddr = (unshieldedKeystore.getBech32Address() as any).toString() as string;
+
         // Build WebSocket URLs: indexer HTTP → WS + /ws suffix; relay HTTP → WS
         const indexerHttpUrl = network.indexerUrl;
         const indexerWsUrl   = toWsUrl(indexerHttpUrl) + '/ws';
@@ -126,21 +132,54 @@ export function useWalletSync(
           relayURL,
         };
 
-        const shieldedWallet = ShieldedWallet(walletCfg).startWithSecretKeys(shieldedSecretKeys);
+        // Attempt to restore each wallet from cache; fall back to fresh start on failure.
+        const shieldedWallet = (() => {
+          const saved = loadState(network.name, unshieldedAddr, 'shielded');
+          if (saved) {
+            try { return ShieldedWallet(walletCfg).restore(saved); }
+            catch { logger.warn('Shielded wallet state restore failed — starting fresh'); }
+          }
+          return ShieldedWallet(walletCfg).startWithSecretKeys(shieldedSecretKeys);
+        })();
 
-        const unshieldedWallet = UnshieldedWallet({
-          networkId:               network.name,
-          indexerClientConnection: walletCfg.indexerClientConnection,
-          txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
-        }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore));
+        const unshieldedWallet = (() => {
+          const saved = loadState(network.name, unshieldedAddr, 'unshielded');
+          if (saved) {
+            try {
+              return UnshieldedWallet({
+                networkId:               network.name,
+                indexerClientConnection: walletCfg.indexerClientConnection,
+                txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
+              }).restore(saved);
+            } catch { logger.warn('Unshielded wallet state restore failed — starting fresh'); }
+          }
+          return UnshieldedWallet({
+            networkId:               network.name,
+            indexerClientConnection: walletCfg.indexerClientConnection,
+            txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
+          }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore));
+        })();
 
-        const dustWallet = DustWallet({
-          ...walletCfg,
-          costParameters: {
-            additionalFeeOverhead: 300_000_000_000_000n,
-            feeBlocksMargin:       5,
-          },
-        }).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
+        const dustWallet = (() => {
+          const saved = loadState(network.name, unshieldedAddr, 'dust');
+          if (saved) {
+            try { return DustWallet({
+              ...walletCfg,
+              costParameters: {
+                additionalFeeOverhead: 300_000_000_000_000n,
+                feeBlocksMargin:       5,
+              },
+            }).restore(saved); }
+            catch { logger.warn('Dust wallet state restore failed — starting fresh'); }
+          }
+          return DustWallet({
+            ...walletCfg,
+            costParameters: {
+              additionalFeeOverhead: 300_000_000_000_000n,
+              feeBlocksMargin:       5,
+            },
+          }).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
+        })();
 
         facade = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
         await facade.start(shieldedSecretKeys, dustSecretKey);
@@ -162,6 +201,19 @@ export function useWalletSync(
           const dustKey = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
           return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}`;
         };
+        // Helper: serialize all three wallets and write to cache.
+        persistState = () =>
+          Promise.all([
+            facade.shielded.serializeState().then(
+              (v: string) => saveState(network.name, unshieldedAddr, 'shielded', v)),
+            facade.unshielded.serializeState().then(
+              (v: string) => saveState(network.name, unshieldedAddr, 'unshielded', v)),
+            facade.dust.serializeState().then(
+              (v: string) => saveState(network.name, unshieldedAddr, 'dust', v)),
+          ]);
+
+        let stateSaved = false;
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sub = (facade.state() as Rx.Observable<any>).pipe(
           Rx.auditTime(1_000),
@@ -169,6 +221,12 @@ export function useWalletSync(
         ).subscribe({
           next: (s) => {
             if (cancelled || pausedRef.current) return;
+            // Save state once when the wallet first reaches fully-synced.
+            if (s.isSynced === true && !stateSaved) {
+              stateSaved = true;
+              void persistState?.().catch(
+                (e: unknown) => logger.warn(`Wallet state save failed: ${String(e)}`));
+            }
             const now   = new Date();
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const coins = s.dust.availableCoinsWithFullInfo(now) as any[];
@@ -221,7 +279,11 @@ export function useWalletSync(
     return () => {
       cancelled = true;
       sub?.unsubscribe();
-      if (facade) void facade.stop();
+      if (facade) {
+        // Best-effort: persist current state before stopping so the next launch
+        // can resume from this point.  facade.stop() runs regardless.
+        void (persistState ? persistState() : Promise.resolve()).catch(() => {}).finally(() => facade.stop());
+      }
     };
   }, [mnemonic, network.name, network.indexerUrl, network.nodeUrl, network.proofServerUrl]);
 
