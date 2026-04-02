@@ -70,10 +70,12 @@ export interface DustGeneration {
 }
 
 export interface WalletBalances {
-  shielded:        Record<string, bigint>;
-  unshielded:      Record<string, bigint>;
-  dust:            bigint;
-  dustGeneration:  DustGeneration | null;
+  shielded:               Record<string, bigint>;
+  unshielded:             Record<string, bigint>;
+  dust:                   bigint;
+  dustGeneration:         DustGeneration | null;
+  /** Number of NIGHT UTXOs not yet registered for DUST generation. */
+  unregisteredNightUtxos: number;
 }
 
 /** A single output within a transfer transaction. */
@@ -88,21 +90,24 @@ export interface SendRequest {
 }
 
 export interface WalletSyncState {
-  synced:          boolean;
-  balances:        WalletBalances | null;
-  error:           string | null;
-  txStatus:        TxStatus;
-  send:            (requests: SendRequest[]) => Promise<void>;
-  resetTx:         () => void;
-  deployTxStatus:  TxStatus;
-  deploy:          (managedPath: string, witnessesPath: string | null) => Promise<void>;
-  resetDeploy:     () => void;
+  synced:              boolean;
+  balances:            WalletBalances | null;
+  error:               string | null;
+  txStatus:            TxStatus;
+  send:                (requests: SendRequest[]) => Promise<void>;
+  resetTx:             () => void;
+  deployTxStatus:      TxStatus;
+  deploy:              (managedPath: string, witnessesPath: string | null) => Promise<void>;
+  resetDeploy:         () => void;
   /** Deploy the built-in fungible-token contract. Returns the contract address. */
-  deployFT:        () => Promise<string>;
-  mintTxStatus:    TxStatus;
-  mintResult:      MintResult | null;
-  mint:            (contractAddress: string, amount: bigint) => Promise<void>;
-  resetMint:       () => void;
+  deployFT:            () => Promise<string>;
+  mintTxStatus:        TxStatus;
+  mintResult:          MintResult | null;
+  mint:                (contractAddress: string, amount: bigint) => Promise<void>;
+  resetMint:           () => void;
+  designateTxStatus:   TxStatus;
+  designate:           () => Promise<void>;
+  resetDesignate:      () => void;
 }
 
 // Internal sync-only slice; txStatus/send/resetTx are composed at return time.
@@ -163,11 +168,12 @@ export function useWalletSync(
   network:  NetworkConfig,
   paused  = false,
 ): WalletSyncState {
-  const [syncState,       setSyncState]       = useState<SyncCore>(SYNC_IDLE);
-  const [txStatus,        setTxStatus]        = useState<TxStatus>({stage: 'idle'});
-  const [deployTxStatus,  setDeployTxStatus]  = useState<TxStatus>({stage: 'idle'});
-  const [mintTxStatus,    setMintTxStatus]    = useState<TxStatus>({stage: 'idle'});
-  const [mintResult,      setMintResult]      = useState<MintResult | null>(null);
+  const [syncState,          setSyncState]          = useState<SyncCore>(SYNC_IDLE);
+  const [txStatus,           setTxStatus]           = useState<TxStatus>({stage: 'idle'});
+  const [deployTxStatus,     setDeployTxStatus]     = useState<TxStatus>({stage: 'idle'});
+  const [mintTxStatus,       setMintTxStatus]       = useState<TxStatus>({stage: 'idle'});
+  const [mintResult,         setMintResult]         = useState<MintResult | null>(null);
+  const [designateTxStatus,  setDesignateTxStatus]  = useState<TxStatus>({stage: 'idle'});
 
   // Refs for wallet internals — accessible from stable send callback without
   // restarting the wallet subscription.
@@ -318,8 +324,10 @@ export function useWalletSync(
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([k, v]) => `${k}:${v}`)
               .join(',');
-          const dustKey = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
-          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}`;
+          const dustKey  = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
+          const unregKey = (s.unshielded.availableCoins as any[])
+            .filter((c: any) => !c.meta?.registeredForDustGeneration).length;
+          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}|${unregKey}`;
         };
         // Helper: serialize all three wallets and write to cache.
         persistState = () =>
@@ -349,6 +357,9 @@ export function useWalletSync(
             }
             const now   = new Date();
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const unregisteredNightUtxos = (s.unshielded.availableCoins as any[])
+              .filter((c: any) => !c.meta?.registeredForDustGeneration).length;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const coins = s.dust.availableCoinsWithFullInfo(now) as any[];
             let limitRaw   = 0n;
             let ratePerDay = 0n;
@@ -371,10 +382,11 @@ export function useWalletSync(
             setSyncState({
               synced:   s.isSynced === true,
               balances: {
-                shielded:       s.shielded.balances   as Record<string, bigint>,
-                unshielded:     s.unshielded.balances  as Record<string, bigint>,
-                dust:           s.dust.walletBalance(now) as bigint,
+                shielded:               s.shielded.balances  as Record<string, bigint>,
+                unshielded:             s.unshielded.balances as Record<string, bigint>,
+                dust:                   s.dust.walletBalance(now) as bigint,
                 dustGeneration,
+                unregisteredNightUtxos,
               },
               error: null,
             });
@@ -836,9 +848,68 @@ export function useWalletSync(
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ---------------------------------------------------------------------------
+  // Designate NIGHT for DUST generation
+  // ---------------------------------------------------------------------------
+
+  const resetDesignate = useCallback(() => setDesignateTxStatus({stage: 'idle'}), []);
+
+  const designate = useCallback(async (): Promise<void> => {
+    const f  = facadeRef.current;
+    const ks = keystoreRef.current;
+    const sk = shieldedKeysRef.current;
+    const dk = dustKeyRef.current;
+    if (!f || !ks || !sk || !dk) {
+      setDesignateTxStatus({stage: 'failed', error: 'Wallet not connected'});
+      return;
+    }
+    try {
+      setDesignateTxStatus({stage: 'building'});
+
+      // Get the latest synced wallet state to read current UTXOs.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state = await Rx.firstValueFrom(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (f as any).state().pipe(Rx.filter((s: any) => s.isSynced)));
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const utxos = (state as any).unshielded.availableCoins.filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (c: any) => !c.meta?.registeredForDustGeneration) as any[];
+
+      if (utxos.length === 0) {
+        setDesignateTxStatus({stage: 'failed', error: 'No unregistered NIGHT UTXOs found'});
+        return;
+      }
+
+      // registerNightUtxosForDustGeneration takes the UTXOs, unshielded public key,
+      // and an inline signing function; it returns a pre-signed recipe.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const recipe = await (f as any).registerNightUtxosForDustGeneration(
+        utxos,
+        ks.getPublicKey(),
+        (payload: Uint8Array) => ks.signData(payload),
+      );
+
+      setDesignateTxStatus({stage: 'submitting'});
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const finalized = await (f as any).finalizeRecipe(recipe);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txHash = await (f as any).submitTransaction(finalized) as string;
+
+      setDesignateTxStatus({stage: 'pending', txHash});
+      logger.info(`Registered ${utxos.length} NIGHT UTXO(s) for DUST generation | txHash: ${txHash}`);
+
+    } catch (e) {
+      logger.error('Designate failed', e);
+      setDesignateTxStatus({stage: 'failed', error: e instanceof Error ? e.message : String(e)});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return {
     ...syncState, txStatus, send, resetTx,
     deployTxStatus, deploy, resetDeploy, deployFT,
     mintTxStatus, mintResult, mint, resetMint,
+    designateTxStatus, designate, resetDesignate,
   };
 }

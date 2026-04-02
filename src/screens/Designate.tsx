@@ -1,40 +1,48 @@
-import React, {useState} from 'react';
-import {Box, Text} from 'ink';
-import TextInput   from 'ink-text-input';
-import SelectInput from 'ink-select-input';
-import TxStatusComponent from '../components/TxStatus.js';
-import DustMonitor       from '../components/DustMonitor.js';
-import {useDust}         from '../hooks/useDust.js';
-import type {WalletSyncState} from '../hooks/useWalletSync.js';
+import React, {useState, useEffect} from 'react';
+import {Box, Text, useInput}         from 'ink';
+import SelectInput                   from 'ink-select-input';
+import TxStatusComponent             from '../components/TxStatus.js';
+import DustMonitor                   from '../components/DustMonitor.js';
+import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 
-type Step = 'view' | 'amount' | 'confirm' | 'submitting';
+type Step = 'view' | 'confirm' | 'submitting';
 
 interface Props {
-  onComplete:  () => void;
-  walletSync:  WalletSyncState;
+  onComplete: () => void;
+  walletSync: WalletSyncState;
 }
 
 export default function Designate({onComplete, walletSync}: Props) {
-  const {txStatus, designate} = useDust();
+  const {balances, designateTxStatus, designate, resetDesignate} = walletSync;
 
-  const [step,   setStep]   = useState<Step>('view');
-  const [amount, setAmount] = useState('');
+  const [step, setStep] = useState<Step>('view');
 
+  useEffect(() => { resetDesignate(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useInput((_, key) => {
+    if (step === 'submitting') {
+      if ((designateTxStatus.stage === 'pending' || designateTxStatus.stage === 'failed') && key.return) {
+        onComplete();
+      }
+      return;
+    }
+    if (key.escape && step === 'confirm') setStep('view');
+  });
 
   async function handleConfirm() {
     setStep('submitting');
-    // TODO: call the DUST pallet's designate extrinsic via the wallet SDK.
-    //   Suggested approach:
-    //     wallet.palletCall('dust', 'designate', { amount: parsedAmount })
-    await designate({nightAmount: amount});
+    await designate();
   }
+
+  const unregistered = balances?.unregisteredNightUtxos ?? 0;
 
   if (step === 'submitting') {
     return (
       <Box flexDirection="column" gap={1}>
-        <TxStatusComponent status={txStatus} />
-        {txStatus.stage === 'confirmed' && (
-          <Text color="green">Designation confirmed. Press 1 to return to dashboard.</Text>
+        <Text bold color="cyan">Designate NIGHT for DUST Generation</Text>
+        <TxStatusComponent status={designateTxStatus} />
+        {(designateTxStatus.stage === 'pending' || designateTxStatus.stage === 'failed') && (
+          <Text dimColor>Press Enter to return to dashboard.</Text>
         )}
       </Box>
     );
@@ -45,54 +53,52 @@ export default function Designate({onComplete, walletSync}: Props) {
       <Text bold color="cyan">Designate NIGHT for DUST Generation</Text>
 
       <DustMonitor
-        balance={walletSync.balances?.dust ?? null}
-        generation={walletSync.balances?.dustGeneration ?? null}
+        balance={balances?.dust ?? null}
+        generation={balances?.dustGeneration ?? null}
       />
 
       {step === 'view' && (
-        <SelectInput
-          items={[
-            {label: 'Designate more NIGHT', value: 'designate'},
-            {label: 'Back to dashboard',    value: 'back'},
-          ]}
-          onSelect={item => {
-            if (item.value === 'designate') setStep('amount');
-            else onComplete();
-          }}
-        />
-      )}
-
-      {step === 'amount' && (
-        <Box gap={1}>
-          <Text>NIGHT to designate: </Text>
-          <TextInput
-            value={amount}
-            onChange={setAmount}
-            onSubmit={() => setStep('confirm')}
-            placeholder="0.000000"
+        <Box flexDirection="column" gap={1}>
+          {unregistered === 0 ? (
+            <Text dimColor>All NIGHT UTXOs are already registered for DUST generation.</Text>
+          ) : (
+            <Text dimColor>
+              {unregistered} NIGHT UTXO{unregistered !== 1 ? 's' : ''} not yet registered.
+            </Text>
+          )}
+          <SelectInput
+            items={[
+              ...(unregistered > 0
+                ? [{label: `Register ${unregistered} UTXO${unregistered !== 1 ? 's' : ''} for DUST`, value: 'designate'}]
+                : []),
+              {label: 'Back to dashboard', value: 'back'},
+            ]}
+            onSelect={item => {
+              if (item.value === 'designate') setStep('confirm');
+              else onComplete();
+            }}
           />
         </Box>
       )}
 
       {step === 'confirm' && (
         <Box flexDirection="column" gap={1}>
-          <Text bold>Confirm designation</Text>
+          <Text bold>Confirm registration</Text>
           <Text dimColor>
-            Designate <Text color="white">{amount} NIGHT</Text> for DUST generation
+            Register <Text color="white">{unregistered} NIGHT UTXO{unregistered !== 1 ? 's' : ''}</Text> for DUST generation.
           </Text>
-          <Text dimColor>
-            This NIGHT will be locked until you undesignate it.
-          </Text>
+          <Text dimColor>UTXOs remain in your wallet but are designated to accrue DUST.</Text>
           <SelectInput
             items={[
-              {label: 'Confirm', value: 'confirm'},
-              {label: 'Cancel',  value: 'cancel'},
+              {label: 'Register', value: 'confirm'},
+              {label: 'Cancel',   value: 'cancel'},
             ]}
             onSelect={item => {
-              if (item.value === 'confirm') handleConfirm();
-              else onComplete();
+              if (item.value === 'confirm') void handleConfirm();
+              else setStep('view');
             }}
           />
+          <Text dimColor>[Esc] back</Text>
         </Box>
       )}
     </Box>
