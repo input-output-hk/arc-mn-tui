@@ -4,6 +4,7 @@ import Spinner                         from 'ink-spinner';
 import TextInput                       from 'ink-text-input';
 import {useWallet}                     from '../hooks/useWallet.js';
 import {deriveFromMnemonic, encryptMnemonic} from '../keys.js';
+import {clearWalletCache}              from '../walletCache.js';
 import type {PersistedWallet}          from '../config.js';
 import type {NetworkConfig}            from '../types.js';
 
@@ -33,8 +34,9 @@ export default function Keys({network}: Props) {
     isCached, unlockWallet,
   } = useWallet();
 
-  const [step,   setStep]   = useState<Step>({kind: 'list'});
-  const [cursor, setCursor] = useState(0);
+  const [step,    setStep]   = useState<Step>({kind: 'list'});
+  const [cursor,  setCursor] = useState(0);
+  const [cleared, setCleared] = useState(false);
 
   const lastIdx = Math.max(0, wallets.length - 1);
   const clamp   = (n: number) => Math.max(0, Math.min(n, lastIdx));
@@ -50,8 +52,8 @@ export default function Keys({network}: Props) {
 
     // List navigation
     if (step.kind === 'list') {
-      if (key.upArrow)   { setCursor(c => clamp(c - 1)); return; }
-      if (key.downArrow) { setCursor(c => clamp(c + 1)); return; }
+      if (key.upArrow)   { setCursor(c => clamp(c - 1)); setCleared(false); return; }
+      if (key.downArrow) { setCursor(c => clamp(c + 1)); setCleared(false); return; }
       if (key.return && wallets.length > 0) {
         const pw = persisted[cursor];
         if (pw.encryptedMnemonic && !isCached(cursor)) {
@@ -62,10 +64,16 @@ export default function Keys({network}: Props) {
         return;
       }
       if (input === 'a') { setStep({kind: 'add-name', draft: ''}); return; }
+      if (input === 'c' && wallets.length > 0) {
+        clearWalletCache(network.name, wallets[cursor].unshielded);
+        setCleared(true);
+        return;
+      }
       if (input === 'x' && wallets.length > 0) {
         const next = clamp(cursor === wallets.length - 1 ? cursor - 1 : cursor);
         removeWallet(cursor);
         setCursor(next);
+        setCleared(false);
       }
     }
   });
@@ -139,7 +147,7 @@ export default function Keys({network}: Props) {
       {/* ── List ──────────────────────────────────────────────────────── */}
       {(step.kind === 'list' || step.kind === 'error') && (<>
 
-        <Text dimColor>[a] add  [x] delete  ↑↓ navigate  Enter unlock+activate</Text>
+        <Text dimColor>[a] add  [x] delete  [c] clear sync cache  ↑↓ navigate  Enter unlock+activate</Text>
 
         <Box flexDirection="column">
           {wallets.length === 0
@@ -165,6 +173,9 @@ export default function Keys({network}: Props) {
 
         {step.kind === 'error' && (
           <Text color="red">⚠ {step.msg}  (press any key)</Text>
+        )}
+        {cleared && (
+          <Text color="green">Sync cache cleared for {wallets[cursor]?.name ?? ''}.</Text>
         )}
 
         {active && (

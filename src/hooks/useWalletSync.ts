@@ -16,7 +16,7 @@ import {
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
 import type { NetworkConfig }                            from '../types.js';
-import { loadState, saveState }                         from '../walletCache.js';
+import { loadState, saveState, deleteState }             from '../walletCache.js';
 import { logger }                                       from '../logger.js';
 
 // Allow the wallet SDK to use WebSocket for GraphQL subscriptions.
@@ -137,7 +137,10 @@ export function useWalletSync(
           const saved = loadState(network.name, unshieldedAddr, 'shielded');
           if (saved) {
             try { return ShieldedWallet(walletCfg).restore(saved); }
-            catch { logger.warn('Shielded wallet state restore failed — starting fresh'); }
+            catch {
+              logger.warn('Shielded wallet state restore failed — evicting cache and starting fresh');
+              deleteState(network.name, unshieldedAddr, 'shielded');
+            }
           }
           return ShieldedWallet(walletCfg).startWithSecretKeys(shieldedSecretKeys);
         })();
@@ -151,7 +154,10 @@ export function useWalletSync(
                 indexerClientConnection: walletCfg.indexerClientConnection,
                 txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
               }).restore(saved);
-            } catch { logger.warn('Unshielded wallet state restore failed — starting fresh'); }
+            } catch {
+              logger.warn('Unshielded wallet state restore failed — evicting cache and starting fresh');
+              deleteState(network.name, unshieldedAddr, 'unshielded');
+            }
           }
           return UnshieldedWallet({
             networkId:               network.name,
@@ -170,7 +176,10 @@ export function useWalletSync(
                 feeBlocksMargin:       5,
               },
             }).restore(saved); }
-            catch { logger.warn('Dust wallet state restore failed — starting fresh'); }
+            catch {
+              logger.warn('Dust wallet state restore failed — evicting cache and starting fresh');
+              deleteState(network.name, unshieldedAddr, 'dust');
+            }
           }
           return DustWallet({
             ...walletCfg,
