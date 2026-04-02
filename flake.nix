@@ -21,9 +21,9 @@
           buildInputs = with pkgs; [
             binaryen
             bubblewrap
+          # calibre
             cargo
             claude-code
-            ebook-convert
             gh
             mdbook
             mdbook-epub
