@@ -6,10 +6,10 @@ const SCREEN_ITEMS: {key: string; label: string; screen: Screen}[] = [
   {key: '0', label: 'Network',   screen: 'network'},
   {key: '1', label: 'Dashboard', screen: 'dashboard'},
   {key: '2', label: 'Send',      screen: 'send'},
-  {key: '3', label: 'Mint',      screen: 'mint'},
-  {key: '4', label: 'Deploy',    screen: 'deploy'},
-  {key: '5', label: 'Keys',      screen: 'keys'},
-  {key: '6', label: 'Designate', screen: 'designate'},
+  {key: '3', label: 'Deploy',    screen: 'deploy'},
+  {key: '4', label: 'Mint',      screen: 'mint'},
+  {key: '5', label: 'Designate', screen: 'designate'},
+  {key: '6', label: 'Keys',      screen: 'keys'},
   {key: '7', label: 'Logs',      screen: 'logs'},
 ];
 

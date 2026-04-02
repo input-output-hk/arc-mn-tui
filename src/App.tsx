@@ -23,19 +23,19 @@ export default function App() {
   const [screen,            setScreen]           = useState<Screen>('dashboard');
   const [network,           setNetwork]          = useState<NetworkConfig>(() => loadConfig().network);
   const [paused,            setPaused]           = useState(false);
-  const [issueCount,        setIssueCount]       = useState(() => logger.issueCount);
-  const [lastSeenIssueCount, setLastSeenIssueCount] = useState(() => logger.issueCount);
+  const [lineCount,         setLineCount]        = useState(() => logger.lineCount);
+  const [lastSeenLineCount, setLastSeenLineCount] = useState(() => logger.lineCount);
   const [menuActive,        setMenuActive]       = useState(false);
 
   const {activeIndex, getMnemonic} = useWallet();
   const mnemonic   = getMnemonic(activeIndex);
   const walletSync = useWalletSync(mnemonic, network, paused);
 
-  // Poll for new log issues every 5 s; only updates state when count actually changes.
+  // Poll for new log lines every 5 s; only updates state when count actually changes.
   useEffect(() => {
     const id = setInterval(() => {
-      const n = logger.issueCount;
-      setIssueCount(prev => prev === n ? prev : n);
+      const n = logger.lineCount;
+      setLineCount(prev => prev === n ? prev : n);
     }, 5_000);
     return () => clearInterval(id);
   }, []);
@@ -48,7 +48,7 @@ export default function App() {
   });
 
   const navigate = (s: Screen) => {
-    if (s === 'logs') setLastSeenIssueCount(logger.issueCount);
+    if (s === 'logs') setLastSeenLineCount(logger.lineCount);
     setScreen(s);
   };
   const toDash     = () => navigate('dashboard');
@@ -78,7 +78,7 @@ export default function App() {
       <NavMenu
         current={screen}
         onNavigate={navigate}
-        hasNewLogs={issueCount > lastSeenIssueCount}
+        hasNewLogs={lineCount > lastSeenLineCount}
         menuActive={menuActive}
         onMenuToggle={() => setMenuActive(a => !a)}
       />
@@ -95,7 +95,7 @@ export default function App() {
         {screen === 'dashboard' && <Dashboard network={network} paused={paused} walletSync={walletSync} />}
         {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} />}
         {screen === 'mint'      && <Mint      onComplete={toDash} />}
-        {screen === 'deploy'    && <Deploy    onComplete={toDash} />}
+        {screen === 'deploy'    && <Deploy    onComplete={toDash} walletSync={walletSync} />}
         {screen === 'keys'      && <Keys network={network} />}
         {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} />}
         {screen === 'logs'      && <Logs />}

@@ -10,6 +10,8 @@ type Level = 'info' | 'warn' | 'error';
 class Logger {
   private path = 'mn-tui.log';
 
+  /** Cumulative count of all log lines since startup or last clear(). */
+  lineCount = 0;
   /** Cumulative count of warn/error calls since startup or last clear(). */
   issueCount = 0;
 
@@ -22,6 +24,7 @@ class Logger {
     const line = `${ts} [${level.toUpperCase()}] ${msg}\n`;
     try {
       appendFileSync(this.path, line, 'utf8');
+      this.lineCount++;
     } catch {
       // swallow — we never want logging to crash the TUI
     }
@@ -45,6 +48,7 @@ class Logger {
   /** Truncate / clear the log file and reset the issue counter. */
   clear() {
     try { writeFileSync(this.path, '', 'utf8'); } catch { /* swallow */ }
+    this.lineCount  = 0;
     this.issueCount = 0;
   }
 }

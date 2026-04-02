@@ -1,51 +1,73 @@
-import React, {useState} from 'react';
-import {Box, Text} from 'ink';
-import TextInput   from 'ink-text-input';
-import SelectInput from 'ink-select-input';
-import TxStatusComponent from '../components/TxStatus.js';
-import {useWallet} from '../hooks/useWallet.js';
-import type {DeployParams} from '../types.js';
+import React, {useState, useEffect} from 'react';
+import {Box, Text, useInput}         from 'ink';
+import TextInput                     from 'ink-text-input';
+import SelectInput                   from 'ink-select-input';
+import TxStatusComponent             from '../components/TxStatus.js';
+import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 
-type Step = 'path' | 'args' | 'confirm' | 'submitting';
+type Step = 'managed' | 'witnesses' | 'confirm' | 'deploying';
 
 interface Props {
   onComplete: () => void;
+  walletSync: WalletSyncState;
 }
 
-export default function Deploy({onComplete}: Props) {
-  const {txStatus} = useWallet();
+export default function Deploy({onComplete, walletSync}: Props) {
+  const {deployTxStatus, deploy, resetDeploy} = walletSync;
 
-  const [step,         setStep]         = useState<Step>('path');
-  const [contractPath, setContractPath] = useState('');
-  const [initArgs,     setInitArgs]     = useState('');
+  const [step,          setStep]          = useState<Step>('managed');
+  const [managedPath,   setManagedPath]   = useState('');
+  const [witnessesPath, setWitnessesPath] = useState('');
 
+  useEffect(() => { resetDeploy(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function handleConfirm() {
-    setStep('submitting');
-    const _params: DeployParams = {contractPath, initArgs};
-    // TODO: deploy contract via the Midnight SDK.
-    //   Suggested approach:
-    //     1. Read the compiled contract bytecode from contractPath.
-    //     2. Parse initArgs as JSON or a simple key=value string.
-    //     3. Call wallet.deployContract(bytecode, initArgs) which submits a
-    //        DeployTx and returns the deployed contract address.
-    await new Promise(r => setTimeout(r, 5_000)); // stub: proof generation + deploy
-    void _params;
+  useInput((_, key) => {
+    if (step === 'deploying') {
+      if ((deployTxStatus.stage === 'pending' || deployTxStatus.stage === 'failed') && key.return) {
+        onComplete();
+      }
+      return;
+    }
+    if (key.escape) {
+      if (step === 'witnesses') { setStep('managed'); return; }
+      if (step === 'confirm')   { setStep('witnesses'); return; }
+    }
+  });
+
+  function handleManagedSubmit(value: string) {
+    const p = value.trim();
+    if (!p) return;
+    setManagedPath(p);
+    setStep('witnesses');
   }
 
-  if (step === 'submitting') {
+  function handleWitnessesSubmit(value: string) {
+    setWitnessesPath(value.trim()); // empty = no witnesses
+    setStep('confirm');
+  }
+
+  async function handleDeploy() {
+    setStep('deploying');
+    await deploy(managedPath, witnessesPath || null);
+  }
+
+  if (step === 'deploying') {
     return (
       <Box flexDirection="column" gap={1}>
-        <TxStatusComponent status={txStatus} />
-        {txStatus.stage === 'confirmed' && (
-          <Box flexDirection="column">
-            <Text color="green">Contract deployed.</Text>
-            <Text dimColor>
-              {/* TODO: display the deployed contract address from txStatus */}
-              Address: 0xSTUB_CONTRACT_ADDRESS
-            </Text>
-            <Text dimColor>Press Enter to return to dashboard</Text>
+        {deployTxStatus.stage === 'pending' ? (
+          <Box flexDirection="column" gap={1}>
+            <Text color="green">● Deployed</Text>
+            <Text dimColor>Contract address:</Text>
+            <Text>{deployTxStatus.txHash}</Text>
+            <Text dimColor>Press Enter to return to dashboard.</Text>
           </Box>
+        ) : (
+          <>
+            <TxStatusComponent status={deployTxStatus} />
+            {deployTxStatus.stage === 'failed' && (
+              <Text dimColor>Press Enter to return to dashboard.</Text>
+            )}
+          </>
         )}
       </Box>
     );
@@ -55,48 +77,56 @@ export default function Deploy({onComplete}: Props) {
     <Box flexDirection="column" gap={1}>
       <Text bold color="cyan">Deploy Contract</Text>
 
-      {step === 'path' && (
-        <Box gap={1}>
-          <Text>Contract file path: </Text>
-          <TextInput
-            value={contractPath}
-            onChange={setContractPath}
-            onSubmit={() => setStep('args')}
-            placeholder="/path/to/contract.compact"
-          />
+      {step === 'managed' && (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Path to the compiled contract's <Text color="white">managed/</Text> directory:</Text>
+          <Box gap={1}>
+            <Text>managed/ path: </Text>
+            <TextInput
+              value={managedPath}
+              onChange={setManagedPath}
+              onSubmit={handleManagedSubmit}
+              placeholder="/path/to/contracts/managed/my-contract"
+            />
+          </Box>
+          <Text dimColor>e.g. contracts/managed/fungible-token</Text>
         </Box>
       )}
 
-      {step === 'args' && (
+      {step === 'witnesses' && (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor>Contract: <Text color="white">{contractPath}</Text></Text>
+          <Text dimColor>managed/ <Text color="white">{managedPath}</Text></Text>
           <Box gap={1}>
-            <Text>Init arguments (JSON): </Text>
+            <Text>Witnesses JS (optional): </Text>
             <TextInput
-              value={initArgs}
-              onChange={setInitArgs}
-              onSubmit={() => setStep('confirm')}
-              placeholder='{}'
+              value={witnessesPath}
+              onChange={setWitnessesPath}
+              onSubmit={handleWitnessesSubmit}
+              placeholder="leave empty for none"
             />
           </Box>
+          <Text dimColor>File must export: <Text color="white">default function makeWitnesses(walletProvider)</Text></Text>
+          <Text dimColor>[Esc] back  [Enter] continue (empty = no witnesses)</Text>
         </Box>
       )}
 
       {step === 'confirm' && (
         <Box flexDirection="column" gap={1}>
           <Text bold>Confirm deployment</Text>
-          <Text dimColor>File <Text color="white">{contractPath}</Text></Text>
-          <Text dimColor>Args <Text color="white">{initArgs || '{}'}</Text></Text>
+          <Text dimColor>Contract  <Text color="white">{managedPath}</Text></Text>
+          <Text dimColor>Witnesses <Text color="white">{witnessesPath || '(none)'}</Text></Text>
+          <Text dimColor>ZK proof generation will take 30–60 seconds.</Text>
           <SelectInput
             items={[
               {label: 'Deploy', value: 'deploy'},
               {label: 'Cancel', value: 'cancel'},
             ]}
             onSelect={item => {
-              if (item.value === 'deploy') handleConfirm();
+              if (item.value === 'deploy') void handleDeploy();
               else onComplete();
             }}
           />
+          <Text dimColor>[Esc] back</Text>
         </Box>
       )}
     </Box>

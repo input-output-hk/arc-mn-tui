@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback }     from 'react';
+import * as path                                         from 'node:path';
+import * as fs                                           from 'node:fs';
+import { pathToFileURL }                                 from 'node:url';
 import { Buffer }                                        from 'buffer';
 import { WebSocket }                                     from 'ws';
 import * as Rx                                           from 'rxjs';
@@ -15,6 +18,12 @@ import {
 }                                                        from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
+import { deployContract }                                from '@midnight-ntwrk/midnight-js-contracts';
+import { CompiledContract }                              from '@midnight-ntwrk/compact-js';
+import { NodeZkConfigProvider }                          from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
+import { httpClientProofProvider }                       from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { indexerPublicDataProvider }                     from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
+import { levelPrivateStateProvider }                     from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import type { NetworkConfig, TxStatus }                  from '../types.js';
 import { loadState, saveState, deleteState }             from '../walletCache.js';
 import { logger }                                       from '../logger.js';
@@ -59,12 +68,15 @@ export interface SendRequest {
 }
 
 export interface WalletSyncState {
-  synced:   boolean;
-  balances: WalletBalances | null;
-  error:    string | null;
-  txStatus: TxStatus;
-  send:     (requests: SendRequest[]) => Promise<void>;
-  resetTx:  () => void;
+  synced:          boolean;
+  balances:        WalletBalances | null;
+  error:           string | null;
+  txStatus:        TxStatus;
+  send:            (requests: SendRequest[]) => Promise<void>;
+  resetTx:         () => void;
+  deployTxStatus:  TxStatus;
+  deploy:          (managedPath: string, witnessesPath: string | null) => Promise<void>;
+  resetDeploy:     () => void;
 }
 
 // Internal sync-only slice; txStatus/send/resetTx are composed at return time.
@@ -78,6 +90,37 @@ const SYNC_IDLE: SyncCore = { synced: false, balances: null, error: null };
 /** Convert an http(s) URL to the corresponding ws(s) URL. */
 function toWsUrl(httpUrl: string): string {
   return httpUrl.replace(/^https/, 'wss').replace(/^http/, 'ws');
+}
+
+/**
+ * Sign any unshielded transaction intents embedded in a balanced recipe.
+ * Required by the deployContract walletProvider.balanceTx adapter.
+ * Ported from shielding-contracts/src/utils.ts.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function signTransactionIntents(tx: any, signFn: (p: Uint8Array) => any, proofMarker: 'proof' | 'pre-proof'): void {
+  if (!tx.intents || tx.intents.size === 0) return;
+  for (const segment of tx.intents.keys()) {
+    const intent = tx.intents.get(segment);
+    if (!intent) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cloned = (ledger as any).Intent.deserialize(
+      'signature', proofMarker, 'pre-binding', intent.serialize());
+    const signature = signFn(cloned.signatureData(segment));
+    if (cloned.fallibleUnshieldedOffer) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sigs = cloned.fallibleUnshieldedOffer.inputs.map((_: any, i: number) =>
+        cloned.fallibleUnshieldedOffer.signatures.at(i) ?? signature);
+      cloned.fallibleUnshieldedOffer = cloned.fallibleUnshieldedOffer.addSignatures(sigs);
+    }
+    if (cloned.guaranteedUnshieldedOffer) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sigs = cloned.guaranteedUnshieldedOffer.inputs.map((_: any, i: number) =>
+        cloned.guaranteedUnshieldedOffer.signatures.at(i) ?? signature);
+      cloned.guaranteedUnshieldedOffer = cloned.guaranteedUnshieldedOffer.addSignatures(sigs);
+    }
+    tx.intents.set(segment, cloned);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,8 +137,9 @@ export function useWalletSync(
   network:  NetworkConfig,
   paused  = false,
 ): WalletSyncState {
-  const [syncState, setSyncState] = useState<SyncCore>(SYNC_IDLE);
-  const [txStatus,  setTxStatus]  = useState<TxStatus>({stage: 'idle'});
+  const [syncState,       setSyncState]       = useState<SyncCore>(SYNC_IDLE);
+  const [txStatus,        setTxStatus]        = useState<TxStatus>({stage: 'idle'});
+  const [deployTxStatus,  setDeployTxStatus]  = useState<TxStatus>({stage: 'idle'});
 
   // Refs for wallet internals — accessible from stable send callback without
   // restarting the wallet subscription.
@@ -109,10 +153,12 @@ export function useWalletSync(
   const keystoreRef     = useRef<any>(null);
   const walletAddrRef   = useRef<string | null>(null);
 
-  // Track paused via ref so the subscription callback sees the latest value
+  // Track paused and network via refs so callbacks see the latest values
   // without needing to restart the wallet.
-  const pausedRef = useRef(paused);
-  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  const pausedRef  = useRef(paused);
+  const networkRef = useRef(network);
+  useEffect(() => { pausedRef.current  = paused;   }, [paused]);
+  useEffect(() => { networkRef.current = network;  }, [network]);
 
   useEffect(() => {
     if (!mnemonic) {
@@ -400,5 +446,129 @@ export function useWalletSync(
     }
   }, []);
 
-  return { ...syncState, txStatus, send, resetTx };
+  // ---------------------------------------------------------------------------
+  // Deploy
+  // ---------------------------------------------------------------------------
+
+  const resetDeploy = useCallback(() => setDeployTxStatus({stage: 'idle'}), []);
+
+  const deploy = useCallback(async (managedPath: string, witnessesPath: string | null): Promise<void> => {
+    const f   = facadeRef.current;
+    const sk  = shieldedKeysRef.current;
+    const dk  = dustKeyRef.current;
+    const ks  = keystoreRef.current;
+    const net = networkRef.current;
+    if (!f || !sk || !dk || !ks) {
+      setDeployTxStatus({stage: 'failed', error: 'Wallet not connected'});
+      return;
+    }
+    try {
+      setDeployTxStatus({stage: 'building'});
+
+      const absManaged  = path.resolve(managedPath);
+      const contractJs  = path.join(absManaged, 'contract', 'index.js');
+      if (!fs.existsSync(contractJs)) {
+        setDeployTxStatus({stage: 'failed', error: `No compiled contract at ${contractJs}`});
+        return;
+      }
+
+      // Coin/encryption public keys come from the live wallet state.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const state            = await Rx.firstValueFrom((f as any).state());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const coinPublicKey    = (state as any).shielded.coinPublicKey.toHexString() as string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const encPublicKey     = (state as any).shielded.encryptionPublicKey.toHexString() as string;
+
+      const contractName = path.basename(absManaged);
+
+      // Build the walletProvider adapter that deployContract expects.
+      const walletProvider = {
+        getCoinPublicKey:       () => coinPublicKey,
+        getEncryptionPublicKey: () => encPublicKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        async balanceTx(tx: any, ttl?: Date) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const recipe = await (f as any).balanceUnboundTransaction(
+            tx,
+            {shieldedSecretKeys: sk, dustSecretKey: dk},
+            {ttl: ttl ?? new Date(Date.now() + 30 * 60_000)},
+          );
+          const signFn = (payload: Uint8Array) => ks.signData(payload);
+          signTransactionIntents(recipe.baseTransaction, signFn, 'proof');
+          if (recipe.balancingTransaction) {
+            signTransactionIntents(recipe.balancingTransaction, signFn, 'pre-proof');
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (f as any).finalizeRecipe(recipe);
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        submitTx: (tx: any) => (f as any).submitTransaction(tx) as any,
+      };
+
+      const indexerHttpUrl = net.indexerUrl;
+      const indexerWsUrl   = toWsUrl(indexerHttpUrl) + '/ws';
+      const zkCfgProvider  = new NodeZkConfigProvider(absManaged);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const providers: any = {
+        privateStateProvider: levelPrivateStateProvider({
+          privateStateStoreName: contractName + '-state',
+          walletProvider,
+        }),
+        publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
+        zkConfigProvider:   zkCfgProvider,
+        proofProvider:      httpClientProofProvider(net.proofServerUrl, zkCfgProvider),
+        walletProvider,
+        midnightProvider:   walletProvider,
+      };
+
+      // Load compiled contract module.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contractModule: any = await import(pathToFileURL(contractJs).href);
+
+      // Build CompiledContract, optionally with user-supplied witnesses.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let compiledContract: any;
+      if (witnessesPath) {
+        const absWitnesses  = path.resolve(witnessesPath);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const witMod: any   = await import(pathToFileURL(absWitnesses).href);
+        const witnesses     = witMod.default(walletProvider);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const makeWit: any     = CompiledContract.withWitnesses;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const withAssets: any  = CompiledContract.withCompiledFileAssets;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        compiledContract = (CompiledContract.make(contractName, contractModule.Contract) as any).pipe(
+          makeWit(witnesses),
+          withAssets(absManaged),
+        );
+      } else {
+        compiledContract = CompiledContract.make(contractName, contractModule.Contract).pipe(
+          CompiledContract.withVacantWitnesses,
+          CompiledContract.withCompiledFileAssets(absManaged),
+        );
+      }
+
+      // ZK proof generation + submission — the slow part (~30–60 s).
+      setDeployTxStatus({stage: 'proving'});
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const deployed: any = await (deployContract as any)(providers, {
+        compiledContract,
+        privateStateId:      contractName + 'State',
+        initialPrivateState: {},
+      });
+
+      const contractAddress: string = deployed.deployTxData.public.contractAddress;
+      // Reuse the txHash field to carry the contract address to the UI.
+      setDeployTxStatus({stage: 'pending', txHash: contractAddress});
+      logger.info(`Deployed contract "${contractName}" at ${contractAddress} on ${net.name}`);
+
+    } catch (e) {
+      setDeployTxStatus({stage: 'failed', error: e instanceof Error ? e.message : String(e)});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return { ...syncState, txStatus, send, resetTx, deployTxStatus, deploy, resetDeploy };
 }
