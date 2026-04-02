@@ -92,8 +92,8 @@ export default function Mint({onComplete, walletSync}: Props) {
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Text bold color="cyan">Mint Tokens</Text>
-      <Text dimColor>Mints to the calling wallet's shielded address.</Text>
+      <Text bold color="cyan">Mint Shielded Tokens</Text>
+      <Text dimColor>Mints shielded tokens to the calling wallet's ZSwap address.</Text>
 
       {step === 'contract' && (
         <Box flexDirection="column" gap={1}>
