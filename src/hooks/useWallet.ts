@@ -1,8 +1,8 @@
-import React, {createContext, useContext, useState, useCallback} from 'react';
-import type {WalletEntry, TokenBalance, SendParams, TxStatus} from '../types.js';
+import React, {createContext, useContext, useState, useCallback, useEffect} from 'react';
+import type {WalletEntry, TokenBalance, SendParams, TxStatus, NetworkName} from '../types.js';
 import {loadConfig, saveConfig}        from '../config.js';
 import type {PersistedWallet}          from '../config.js';
-import {decryptMnemonic}               from '../keys.js';
+import {decryptMnemonic, deriveFromMnemonic} from '../keys.js';
 
 // ---------------------------------------------------------------------------
 // Stub balances — replaced when real wallet sync is implemented
@@ -22,6 +22,9 @@ interface WalletContextValue {
   persisted:      PersistedWallet[];
   activeIndex:    number;
   activeWallet:   WalletEntry | null;
+  networkName:    NetworkName;
+  /** Notify the wallet context that the active network changed. */
+  setNetwork:     (name: NetworkName) => void;
   addWallet:      (pw: PersistedWallet, plainMnemonic?: string) => void;
   removeWallet:   (idx: number) => void;
   setActiveIndex: (idx: number) => void;
@@ -52,15 +55,63 @@ export function WalletProvider({children}: {children: React.ReactNode}) {
     const len = cfg.wallets?.length ?? 0;
     return len === 0 ? 0 : Math.max(0, Math.min(cfg.activeWallet ?? 0, len - 1));
   });
+  const [networkName,  setNetworkName]  = useState<NetworkName>(() => loadConfig().lastNetwork);
   const [txStatus,     setTxStatus]     = useState<TxStatus>({stage: 'idle'});
 
   // Session-only mnemonic cache: wallet index → plaintext mnemonic.
   // Never persisted; cleared when wallets are removed (indices shift).
   const [mnemonicCache, setMnemonicCache] = useState<Map<number, string>>(() => new Map());
 
-  const wallets: WalletEntry[] = persisted.map(p => ({
-    name: p.name, unshielded: p.unshielded, shielded: p.shielded, dust: p.dust,
-  }));
+  // ---- address derivation -------------------------------------------------
+  //
+  // Whenever the active network or the mnemonic cache changes, check if any
+  // wallet is missing addresses for the current network.  If the mnemonic is
+  // available, derive and persist them automatically.
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const toUpdate: Array<{idx: number; name: NetworkName; unshielded: string; shielded: string; dust: string}> = [];
+      for (let i = 0; i < persisted.length; i++) {
+        const pw = persisted[i];
+        if (pw.addresses[networkName]) continue;   // already have it for this network
+        const mnemonic = mnemonicCache.get(i);
+        if (!mnemonic) continue;                   // can't derive without mnemonic
+        try {
+          const addrs = await deriveFromMnemonic(mnemonic, networkName);
+          toUpdate.push({idx: i, name: networkName, ...addrs});
+        } catch {
+          // derivation failure is non-fatal; skip this wallet
+        }
+      }
+      if (!active || toUpdate.length === 0) return;
+      setPersisted(prev => {
+        const next = [...prev];
+        for (const {idx, name, unshielded, shielded, dust} of toUpdate) {
+          next[idx] = {
+            ...next[idx],
+            addresses: {...next[idx].addresses, [name]: {unshielded, shielded, dust}},
+          };
+        }
+        const cfg = loadConfig();
+        saveConfig({...cfg, wallets: next});
+        return next;
+      });
+    })();
+    return () => { active = false; };
+  }, [networkName, mnemonicCache]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- derived wallet list ------------------------------------------------
+
+  const wallets: WalletEntry[] = persisted.map(p => {
+    const addrs = p.addresses[networkName];
+    return {
+      name:       p.name,
+      unshielded: addrs?.unshielded ?? '',
+      shielded:   addrs?.shielded   ?? '',
+      dust:       addrs?.dust        ?? '',
+    };
+  });
 
   const activeWallet = wallets[activeIndex] ?? null;
 
@@ -111,6 +162,12 @@ export function WalletProvider({children}: {children: React.ReactNode}) {
     saveConfig({...cfg, activeWallet: clamped});
   }, [wallets.length]);
 
+  const setNetwork = useCallback((name: NetworkName) => {
+    setNetworkName(name);
+    // lastNetwork is already persisted by the caller (App.applyNetwork) along
+    // with the network overrides, so we don't duplicate the save here.
+  }, []);
+
   // ---- send (stub) -------------------------------------------------------
 
   const send = useCallback(async (_params: SendParams) => {
@@ -131,6 +188,7 @@ export function WalletProvider({children}: {children: React.ReactNode}) {
 
   const value: WalletContextValue = {
     wallets, persisted, activeIndex, activeWallet,
+    networkName, setNetwork,
     addWallet, removeWallet, setActiveIndex,
     isCached, getMnemonic, unlockWallet,
     wallet, txStatus, send,

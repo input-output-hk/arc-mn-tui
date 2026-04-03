@@ -11,7 +11,7 @@ import Keys      from './screens/Keys.js';
 import Designate from './screens/Designate.js';
 import Logs      from './screens/Logs.js';
 import type {Screen, NetworkConfig} from './types.js';
-import {loadConfig, saveConfig}    from './config.js';
+import {loadConfig, saveConfig, buildNetworkConfig} from './config.js';
 import {useWallet}                  from './hooks/useWallet.js';
 import {useWalletSync}              from './hooks/useWalletSync.js';
 import {logger}                    from './logger.js';
@@ -22,13 +22,16 @@ export default function App() {
   const {stdout} = useStdout();
 
   const [screen,            setScreen]           = useState<Screen>('dashboard');
-  const [network,           setNetwork]          = useState<NetworkConfig>(() => loadConfig().network);
+  const [network,           setNetworkConfig]     = useState<NetworkConfig>(() => {
+    const cfg = loadConfig();
+    return buildNetworkConfig(cfg.lastNetwork, cfg.networkOverrides);
+  });
   const [paused,            setPaused]           = useState(false);
   const [lineCount,         setLineCount]        = useState(() => logger.lineCount);
   const [lastSeenLineCount, setLastSeenLineCount] = useState(() => logger.lineCount);
   const [menuActive,        setMenuActive]       = useState(false);
 
-  const {activeIndex, getMnemonic} = useWallet();
+  const {activeIndex, getMnemonic, setNetwork} = useWallet();
   const mnemonic   = getMnemonic(activeIndex);
   const walletSync = useWalletSync(mnemonic, network, paused);
 
@@ -54,8 +57,17 @@ export default function App() {
   };
   const toDash     = () => navigate('dashboard');
   const applyNetwork = (cfg: NetworkConfig) => {
-    setNetwork(cfg);
-    saveConfig({...loadConfig(), network: cfg});
+    setNetworkConfig(cfg);
+    setNetwork(cfg.name);
+    const stored = loadConfig();
+    saveConfig({
+      ...stored,
+      lastNetwork:      cfg.name,
+      networkOverrides: {
+        ...stored.networkOverrides,
+        [cfg.name]: {nodeUrl: cfg.nodeUrl, indexerUrl: cfg.indexerUrl, proofServerUrl: cfg.proofServerUrl},
+      },
+    });
   };
 
   return (

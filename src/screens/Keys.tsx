@@ -35,7 +35,7 @@ export default function Keys({network}: Props) {
   } = useWallet();
 
   const [step,    setStep]   = useState<Step>({kind: 'list'});
-  const [cursor,  setCursor] = useState(0);
+  const [cursor,  setCursor] = useState(activeIndex);
   const [cleared, setCleared] = useState(false);
 
 
@@ -65,7 +65,7 @@ export default function Keys({network}: Props) {
         return;
       }
       if (input === 'a') { setStep({kind: 'add-name', draft: ''}); return; }
-      if (input === 'c' && wallets.length > 0) {
+      if (input === 'c' && wallets.length > 0 && wallets[cursor].unshielded) {
         clearWalletCache(network.name, wallets[cursor].unshielded);
         setCleared(true);
         return;
@@ -100,9 +100,13 @@ export default function Keys({network}: Props) {
     setStep({kind: 'working', msg: 'Deriving addresses and encrypting…'});
     void (async () => {
       try {
-        const addrs            = await deriveFromMnemonic(mnemonic, network.name);
+        const addrs             = await deriveFromMnemonic(mnemonic, network.name);
         const encryptedMnemonic = await encryptMnemonic(mnemonic, passphrase);
-        const entry: PersistedWallet = {name, ...addrs, encryptedMnemonic};
+        const entry: PersistedWallet = {
+          name,
+          addresses: {[network.name]: addrs},
+          encryptedMnemonic,
+        };
         addWallet(entry, mnemonic);
         setCursor(wallets.length); // new wallet will be appended here
         setStep({kind: 'list'});
@@ -163,8 +167,8 @@ export default function Keys({network}: Props) {
                     {i === activeIndex ? '●' : '○'}{' '}
                     {String(i).padStart(2)}{'  '}{w.name.padEnd(14)}
                   </Text>
-                  <Text color={i === cursor ? 'white' : undefined} wrap="truncate">
-                    {w.unshielded}
+                  <Text color={i === cursor ? (w.unshielded ? 'white' : 'yellow') : undefined} wrap="truncate">
+                    {w.unshielded || '(unlock to derive addresses for this network)'}
                   </Text>
                   <Text dimColor>{'  '}{sourceLabel(persisted[i], i)}</Text>
                 </Box>
@@ -182,9 +186,13 @@ export default function Keys({network}: Props) {
         {active && (
           <Box flexDirection="column" borderStyle="single" paddingX={1}>
             <Text bold color="cyan">{active.name}</Text>
-            <Text dimColor>unshielded  <Text color="white">{active.unshielded}</Text></Text>
-            <Text dimColor>shielded    <Text color="white">{active.shielded}</Text></Text>
-            <Text dimColor>dust        <Text color="white">{active.dust}</Text></Text>
+            {active.unshielded ? (<>
+              <Text dimColor>unshielded  <Text color="white">{active.unshielded}</Text></Text>
+              <Text dimColor>shielded    <Text color="white">{active.shielded}</Text></Text>
+              <Text dimColor>dust        <Text color="white">{active.dust}</Text></Text>
+            </>) : (
+              <Text color="yellow">Addresses not yet derived for network {network.name} — unlock to derive.</Text>
+            )}
           </Box>
         )}
 

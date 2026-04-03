@@ -4,6 +4,7 @@ import SelectInput from 'ink-select-input';
 import TextInput   from 'ink-text-input';
 import type {NetworkConfig, NetworkName} from '../types.js';
 import {NETWORK_DEFAULTS} from '../types.js';
+import {loadConfig} from '../config.js';
 
 type Step = 'name' | 'nodeUrl' | 'indexerUrl' | 'proofServerUrl' | 'confirm';
 
@@ -27,12 +28,14 @@ export default function Network({current, onSave, onComplete}: Props) {
   const [indexerUrl,     setIndexerUrl]     = useState(current.indexerUrl);
   const [proofServerUrl, setProofServerUrl] = useState(current.proofServerUrl);
 
-
   function handleNameSelect(item: {value: NetworkName}) {
     const n = item.value;
     setName(n);
-    setNodeUrl(NETWORK_DEFAULTS[n].nodeUrl);
-    setIndexerUrl(NETWORK_DEFAULTS[n].indexerUrl);
+    // Pre-fill with any previously stored overrides, falling back to defaults.
+    const saved = loadConfig().networkOverrides[n] ?? {};
+    setNodeUrl(        saved.nodeUrl        ?? NETWORK_DEFAULTS[n].nodeUrl);
+    setIndexerUrl(     saved.indexerUrl     ?? NETWORK_DEFAULTS[n].indexerUrl);
+    setProofServerUrl( saved.proofServerUrl ?? NETWORK_DEFAULTS[n].proofServerUrl);
     setStep('nodeUrl');
   }
 

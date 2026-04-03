@@ -26,29 +26,32 @@ export interface NetworkConfig {
   proofServerUrl: string;
 }
 
-export const NETWORK_DEFAULTS: Record<NetworkName, Omit<NetworkConfig, 'name' | 'proofServerUrl'>> = {
+export const NETWORK_DEFAULTS: Record<NetworkName, Omit<NetworkConfig, 'name'>> = {
   mainnet:    {
-    nodeUrl:    'https://rpc.mainnet.midnight.network',
-    indexerUrl: 'https://indexer.mainnet.midnight.network/api/v4/graphql',
+    nodeUrl:        'https://rpc.mainnet.midnight.network',
+    indexerUrl:     'https://indexer.mainnet.midnight.network/api/v4/graphql',
+    proofServerUrl: 'http://localhost:6300',
   },
   preprod:    {
-    nodeUrl:    'https://rpc.preprod.midnight.network',
-    indexerUrl: 'https://indexer.preprod.midnight.network/api/v4/graphql',
+    nodeUrl:        'https://rpc.preprod.midnight.network',
+    indexerUrl:     'https://indexer.preprod.midnight.network/api/v4/graphql',
+    proofServerUrl: 'https://proof-server.preprod.midnight.network',
   },
   preview:    {
-    nodeUrl:    'https://rpc.preview.midnight.network',
-    indexerUrl: 'https://indexer.preview.midnight.network/api/v4/graphql',
+    nodeUrl:        'https://rpc.preview.midnight.network',
+    indexerUrl:     'https://indexer.preview.midnight.network/api/v4/graphql',
+    proofServerUrl: 'https://proof-server.preview.midnight.network',
   },
   undeployed: {
-    nodeUrl:    'http://localhost:9944',
-    indexerUrl: 'http://localhost:8088/api/v4/graphql',
+    nodeUrl:        'http://localhost:9944',
+    indexerUrl:     'http://localhost:8088/api/v4/graphql',
+    proofServerUrl: 'http://localhost:6300',
   },
 };
 
 export const DEFAULT_NETWORK_CONFIG: NetworkConfig = {
-  name:           'undeployed',
+  name: 'undeployed',
   ...NETWORK_DEFAULTS['undeployed'],
-  proofServerUrl: 'http://localhost:6300',
 };
 
 // ---------------------------------------------------------------------------
