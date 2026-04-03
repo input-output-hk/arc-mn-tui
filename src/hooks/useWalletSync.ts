@@ -151,6 +151,11 @@ function computeDustAccruing(
   const w60 = samples.filter(x => x.ts >= nowMs - 60_000);
   if (w60.length < 2) return null;
   const first = w60[0].balance;
+  const last  = w60[w60.length - 1].balance;
+  // Balance is actively decreasing (natural over-cap decay or net-negative
+  // generation).  Return null rather than false so the cross-wallet warning
+  // is not shown — we cannot distinguish cross-wallet from decay in this state.
+  if (last < first) return null;
   return w60.slice(1).some(x => x.balance > first);
 }
 
@@ -372,16 +377,21 @@ export function useWalletSync(
         // Throttle to at most one UI update per second, and skip re-renders when
         // nothing visible changed.  Excludes dust.walletBalance() (time-based) and
         // generatedNow (also time-based); uses coin count + pending count instead.
+        // unshieldedKey tracks ALL available + pending unshielded coins so that
+        // spending a registered NIGHT UTXO (whose removal from unregKey was 0→0)
+        // still triggers a re-render and a fresh read of s.unshielded.balances.
         const stateKey = (s: any): string => {
           const ser = (rec: Record<string, bigint>) =>
             Object.entries(rec as Record<string, bigint>)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([k, v]) => `${k}:${v}`)
               .join(',');
-          const dustKey  = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
-          const unregKey = (s.unshielded.availableCoins as any[])
-            .filter((c: any) => !c.meta?.registeredForDustGeneration).length;
-          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}|${unregKey}`;
+          const dustKey        = `${(s.dust.availableCoins as any[]).length}:${(s.dust.pendingCoins as any[]).length}`;
+          // Track ALL unshielded available + pending coins (registered + unregistered) so
+          // that spending any NIGHT UTXO — including registered ones — is detected even
+          // when s.unshielded.balances hasn't yet updated in the same emission.
+          const unshieldedKey  = `${(s.unshielded.availableCoins as any[]).length}:${((s.unshielded as any).pendingCoins as any[] | undefined)?.length ?? 0}`;
+          return `${String(s.isSynced)}|${ser(s.shielded.balances)}|${ser(s.unshielded.balances)}|${dustKey}|${unshieldedKey}`;
         };
         // Helper: serialize all three wallets and write to cache.
         persistState = () =>

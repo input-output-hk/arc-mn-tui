@@ -8,11 +8,12 @@ import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 type Step = 'managed' | 'witnesses' | 'confirm' | 'deploying';
 
 interface Props {
-  onComplete: () => void;
-  walletSync: WalletSyncState;
+  onComplete:        () => void;
+  walletSync:        WalletSyncState;
+  onWorkInProgress?: (wip: boolean) => void;
 }
 
-export default function Deploy({onComplete, walletSync}: Props) {
+export default function Deploy({onComplete, walletSync, onWorkInProgress}: Props) {
   const {deployTxStatus, deploy, resetDeploy} = walletSync;
 
   const [step,          setStep]          = useState<Step>('managed');
@@ -20,6 +21,12 @@ export default function Deploy({onComplete, walletSync}: Props) {
   const [witnessesPath, setWitnessesPath] = useState('');
 
   useEffect(() => { resetDeploy(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Notify parent when past the initial managed-path entry step.
+  useEffect(() => {
+    onWorkInProgress?.(step !== 'managed');
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onWorkInProgress?.(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useInput((_, key) => {
     if (step === 'deploying') {

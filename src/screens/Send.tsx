@@ -4,6 +4,7 @@ import TextInput                              from 'ink-text-input';
 import SelectInput                            from 'ink-select-input';
 import TxStatusComponent                      from '../components/TxStatus.js';
 import type {WalletSyncState, SendRequest}    from '../hooks/useWalletSync.js';
+import {useWallet}                            from '../hooks/useWallet.js';
 
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -70,16 +71,18 @@ interface Draft {
 type Step = 'list' | 'token' | 'recipient' | 'amount' | 'submitting';
 
 interface Props {
-  onComplete:  () => void;
-  walletSync:  WalletSyncState;
+  onComplete:        () => void;
+  walletSync:        WalletSyncState;
+  onWorkInProgress?: (wip: boolean) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export default function Send({onComplete, walletSync}: Props) {
+export default function Send({onComplete, walletSync, onWorkInProgress}: Props) {
   const {balances, txStatus, send, resetTx} = walletSync;
+  const {wallets} = useWallet();
 
   const [step,     setStep]    = useState<Step>('list');
   const [drafts,   setDrafts]  = useState<Draft[]>([]);
@@ -91,6 +94,12 @@ export default function Send({onComplete, walletSync}: Props) {
 
   // Reset tx state when the screen is first shown.
   useEffect(() => { resetTx(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Notify parent when work is in progress (step other than list, or queued drafts).
+  useEffect(() => {
+    onWorkInProgress?.(step !== 'list' || drafts.length > 0);
+  }, [step, drafts.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onWorkInProgress?.(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Handle Enter after a terminal tx state.
@@ -150,8 +159,14 @@ export default function Send({onComplete, walletSync}: Props) {
   }
 
   function handleRecipientSubmit(value: string) {
-    const addr = value.trim();
-    if (!addr) { setToError('Address is required.'); return; }
+    const rawInput = value.trim();
+    if (!rawInput) { setToError('Address is required.'); return; }
+    // Allow a local wallet name as shorthand for its address.
+    const nameMatch = wallets.find(w => w.name.toLowerCase() === rawInput.toLowerCase());
+    const addr = nameMatch
+      ? (choice?.type === 'shielded' ? nameMatch.shielded : nameMatch.unshielded)
+      : rawInput;
+    if (!addr) { setToError('Wallet has no address for this network.'); return; }
     // Soft address-type hint (SDK will reject definitively on submit).
     if (choice?.type === 'shielded' && !addr.includes('shield-addr')) {
       setToError('Expected a shielded address (mn_shield-addr_…).');
@@ -161,6 +176,7 @@ export default function Send({onComplete, walletSync}: Props) {
       setToError('Expected an unshielded address (mn_addr_…).');
       return;
     }
+    setTo(addr);
     setToError('');
     setAmtStr('');
     setAmtError('');
@@ -291,15 +307,31 @@ export default function Send({onComplete, walletSync}: Props) {
         <Box flexDirection="column" gap={1}>
           <Text dimColor>Token: <Text color="white">{choice.label}</Text></Text>
           <Box gap={1}>
-            <Text>Recipient address:</Text>
+            <Text>Recipient address or wallet name:</Text>
             <TextInput
               value={to}
               onChange={v => { setTo(v); setToError(''); }}
               onSubmit={handleRecipientSubmit}
-              placeholder={choice.type === 'shielded' ? 'mn_shield-addr_…' : 'mn_addr_…'}
+              placeholder={choice.type === 'shielded' ? 'mn_shield-addr_… or name' : 'mn_addr_… or name'}
             />
           </Box>
           {toError && <Text color="red">{toError}</Text>}
+          {wallets.some(w => choice.type === 'shielded' ? w.shielded : w.unshielded) && (
+            <Box flexDirection="column">
+              <Text dimColor>Saved wallets:</Text>
+              {wallets
+                .filter(w => choice.type === 'shielded' ? w.shielded : w.unshielded)
+                .map((w, i) => {
+                  const addr = choice.type === 'shielded' ? w.shielded : w.unshielded;
+                  return (
+                    <Box key={i} gap={2}>
+                      <Box width={20}><Text dimColor>{w.name}</Text></Box>
+                      <Text dimColor>{addr}</Text>
+                    </Box>
+                  );
+                })}
+            </Box>
+          )}
           <Text dimColor>[Esc] back  [Enter] continue</Text>
         </Box>
       )}

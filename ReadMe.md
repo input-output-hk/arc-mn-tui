@@ -103,8 +103,11 @@ Deploy an arbitrary compiled Compact contract to the network.
 
 Manage the wallet list and control which wallet is active.
 
-- **Add** (`a`) — import a wallet by entering its 24-word BIP-39 mnemonic, a name,
-  and an encryption passphrase. The mnemonic is stored encrypted with OpenPGP
+- **New** (`n`) — generate a fresh wallet: the app produces a random 24-word BIP-39
+  mnemonic (256-bit entropy) and displays it for the user to write down before
+  proceeding to set a name and encryption passphrase.
+- **Import** (`a`) — import an existing wallet by entering its 24-word BIP-39 mnemonic,
+  a name, and an encryption passphrase. The mnemonic is stored encrypted with OpenPGP
   symmetric encryption; the passphrase is never persisted.
 - **Navigate** (↑ / ↓) — move the cursor through the wallet list.
 - **Activate / unlock** (Enter) — if the wallet is already unlocked, activate it
@@ -144,11 +147,14 @@ Select and configure the Midnight network to connect to.
 
 ### 8 · Contract State
 
-Inspect the public ledger state of a deployed fungible-token contract.
+Inspect the public ledger state of any deployed contract.
 
-- Enter a contract address (hex, with or without `0x` prefix) and fetch its
-  on-chain state via the indexer.
-- Displays `total_supply` and `mint_nonce` from the contract's ledger.
+- Enter a contract address (hex, with or without `0x` prefix).
+- Optionally provide the path to the contract's compiled `managed/` directory
+  (e.g. `contracts/managed/my-contract`). The directory's `contract/index.js`
+  is loaded and its `ledger()` function is called to decode the on-chain state,
+  which is then displayed as pretty-printed JSON.
+- If no `managed/` path is given, the raw state bytes are shown as a hex string.
 - Press `r` to refresh, `n` or Esc to query a different address.
 
 ### 9 · Logs
@@ -176,3 +182,38 @@ View and manage the application debug log.
 
 See [lessons-learned.md](lessons-learned.md) for a record of non-trivial obstacles
 encountered during development and their workarounds.
+
+---
+
+## Web and Mobile Portability
+
+The application is architecturally well-suited for migration to a web or mobile UI because
+the business logic is cleanly separated from the terminal rendering layer.
+
+**Layer separation:**
+
+- **Hooks (`src/hooks/`)** — contain all SDK interaction and RxJS observable handling;
+  zero Ink imports. `useWalletSync.ts` is the only file that touches RxJS
+  (`auditTime`, `distinctUntilChanged` on `facade.state()`). These hooks are portable
+  to any React environment unchanged.
+- **Screen and component files (`src/screens/`, `src/components/`)** — pure Ink
+  rendering; never import the Midnight SDK or RxJS directly. They receive state and
+  callbacks through hook return values only.
+
+**Web app migration** — realistic with modest effort:
+
+1. Replace Ink primitives (`<Box>`, `<Text>`) with HTML/CSS equivalents. Ink uses CSS
+   flexbox internally, so the layout model maps directly to `<div style={{display:'flex',…}}>`.
+2. Swap the two Node.js storage modules (`config.ts`, `walletCache.ts`) for browser
+   storage (`localStorage` or `IndexedDB`). Both are already clean abstractions with
+   narrow read/write interfaces.
+3. `globalThis.WebSocket` — native in browsers; the explicit assignment in
+   `useWalletSync.ts` becomes a no-op.
+4. LevelDB (`levelPrivateStateProvider`) — the `level` package has a
+   browser-compatible backend (`browser-level`) so this is a dependency swap, not a
+   rewrite.
+
+**Mobile (React Native)** — the hooks layer is still portable, but the Midnight SDK's
+use of Wasm modules for ZK proof generation and native crypto bindings may not run
+under React Native's Hermes engine. That risk lives at the SDK level, not the
+application level.

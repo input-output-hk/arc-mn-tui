@@ -2,6 +2,7 @@ import React, {useState}              from 'react';
 import {Box, Text, useInput}           from 'ink';
 import Spinner                         from 'ink-spinner';
 import TextInput                       from 'ink-text-input';
+import * as bip39                      from 'bip39';
 import {useWallet}                     from '../hooks/useWallet.js';
 import {deriveFromMnemonic, encryptMnemonic} from '../keys.js';
 import {clearWalletCache}              from '../walletCache.js';
@@ -16,6 +17,8 @@ interface Props { network: NetworkConfig; }
 
 type Step =
   | {kind: 'list'}
+  | {kind: 'create-name';    draft:    string}
+  | {kind: 'create-show';    name:     string; mnemonic: string}
   | {kind: 'add-name';       draft:    string}
   | {kind: 'add-mnemonic';   name:     string; draft: string}
   | {kind: 'add-passphrase'; name:     string; mnemonic: string; draft: string}
@@ -51,6 +54,12 @@ export default function Keys({network}: Props) {
     // Escape cancels any add-* step
     if (key.escape && step.kind !== 'list') { setStep({kind: 'list'}); return; }
 
+    // create-show: Enter to advance to passphrase step
+    if (step.kind === 'create-show' && key.return) {
+      setStep({kind: 'add-passphrase', name: step.name, mnemonic: step.mnemonic, draft: ''});
+      return;
+    }
+
     // List navigation
     if (step.kind === 'list') {
       if (key.upArrow)   { setCursor(c => clamp(c - 1)); setCleared(false); return; }
@@ -64,7 +73,8 @@ export default function Keys({network}: Props) {
         }
         return;
       }
-      if (input === 'a') { setStep({kind: 'add-name', draft: ''}); return; }
+      if (input === 'n') { setStep({kind: 'create-name', draft: ''}); return; }
+      if (input === 'a') { setStep({kind: 'add-name',    draft: ''}); return; }
       if (input === 'c' && wallets.length > 0 && wallets[cursor].unshielded) {
         clearWalletCache(network.name, wallets[cursor].unshielded);
         setCleared(true);
@@ -80,6 +90,13 @@ export default function Keys({network}: Props) {
   });
 
   // ---- submit handlers ----------------------------------------------------
+
+  function handleCreateNameSubmit(value: string) {
+    const name = value.trim();
+    if (!name) return;
+    const mnemonic = bip39.generateMnemonic(256); // 24 words
+    setStep({kind: 'create-show', name, mnemonic});
+  }
 
   function handleNameSubmit(value: string) {
     const name = value.trim();
@@ -152,11 +169,11 @@ export default function Keys({network}: Props) {
       {/* ── List ──────────────────────────────────────────────────────── */}
       {(step.kind === 'list' || step.kind === 'error') && (<>
 
-        <Text dimColor>[a] add  [x] delete  [c] clear sync cache  ↑↓ navigate  Enter unlock+activate</Text>
+        <Text dimColor>[n] new  [a] import  [x] delete  [c] clear sync cache  ↑↓ navigate  Enter unlock+activate</Text>
 
         <Box flexDirection="column">
           {wallets.length === 0
-            ? <Text dimColor>No wallets loaded — press [a] to add one.</Text>
+            ? <Text dimColor>No wallets loaded — press [n] to create one or [a] to import.</Text>
             : wallets.map((w, i) => (
                 <Box key={i} flexDirection="row">
                   <Text
@@ -197,6 +214,41 @@ export default function Keys({network}: Props) {
         )}
 
       </>)}
+
+      {/* ── Create: wallet name ───────────────────────────────────────── */}
+      {step.kind === 'create-name' && (
+        <Box flexDirection="column" gap={1}>
+          <Text>New wallet name:</Text>
+          <TextInput
+            value={step.draft}
+            onChange={d => setStep({...step, draft: d})}
+            onSubmit={handleCreateNameSubmit}
+            placeholder="alice"
+          />
+          <Text dimColor>[Esc] cancel</Text>
+        </Box>
+      )}
+
+      {/* ── Create: show generated seed phrase ────────────────────────── */}
+      {step.kind === 'create-show' && (
+        <Box flexDirection="column" gap={1}>
+          <Text bold color="yellow">⚠ Write down these 24 words in order and store them somewhere safe.</Text>
+          <Text bold color="yellow">  They are the only way to recover this wallet. They will not be shown again.</Text>
+          <Box gap={4} paddingY={1}>
+            {[0, 1, 2].map(col => (
+              <Box key={col} flexDirection="column">
+                {step.mnemonic.split(' ').slice(col * 8, col * 8 + 8).map((word, i) => (
+                  <Box key={i} gap={1}>
+                    <Box width={4}><Text dimColor>{String(col * 8 + i + 1).padStart(2)}.</Text></Box>
+                    <Text color="white">{word}</Text>
+                  </Box>
+                ))}
+              </Box>
+            ))}
+          </Box>
+          <Text dimColor>[Enter] I have written down all 24 words  [Esc] cancel</Text>
+        </Box>
+      )}
 
       {/* ── Add: wallet name ──────────────────────────────────────────── */}
       {step.kind === 'add-name' && (
