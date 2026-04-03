@@ -3,8 +3,10 @@ import {Box, Text} from 'ink';
 import type {DustGeneration} from '../hooks/useWalletSync.js';
 
 interface Props {
-  balance:    bigint | null;
-  generation: DustGeneration | null;
+  balance:              bigint | null;
+  generation:           DustGeneration | null;
+  registeredNightUtxos: number;
+  dustAccruing:         boolean | null;
 }
 
 /** Format raw NIGHT (÷ 10^6) with 6 decimal places. */
@@ -38,7 +40,14 @@ function fmtFillTime(d: Date): string {
 
 const LBL_W = 14;
 
-export default function DustMonitor({balance, generation}: Props) {
+export default function DustMonitor({balance, generation, registeredNightUtxos, dustAccruing}: Props) {
+  // dustAccruing===false AND generation is present means the SDK still reports
+  // active coin parameters but no balance increase has been observed in the
+  // last ~60 s.  This is the fingerprint of a cross-wallet registration whose
+  // cancellation event hasn't propagated yet, or a filled-but-still-registered
+  // UTXO set.  Hide the misleading rate/fill-time and show a warning instead.
+  const staleGeneration = generation !== null && dustAccruing === false;
+
   return (
     <Box flexDirection="column" borderStyle="single" paddingX={1}>
       <Text bold color="cyan">DUST Generation</Text>
@@ -48,8 +57,22 @@ export default function DustMonitor({balance, generation}: Props) {
           <Text color="white">{fmtDust(balance)} DUST</Text>
         </Box>
       )}
-      {generation === null ? (
+      {generation === null && registeredNightUtxos === 0 ? (
         <Text dimColor>No NIGHT registered for DUST generation.</Text>
+      ) : generation === null ? (
+        <Text dimColor>DUST directed to another wallet ({registeredNightUtxos} UTXO{registeredNightUtxos !== 1 ? 's' : ''} registered).</Text>
+      ) : staleGeneration ? (
+        <>
+          <Box gap={2}>
+            <Box width={LBL_W}><Text dimColor>designated</Text></Box>
+            <Text color="white">{fmtNight(generation.designated)} NIGHT</Text>
+          </Box>
+          <Box gap={2}>
+            <Box width={LBL_W}><Text dimColor>UTXOs</Text></Box>
+            <Text color="white">{generation.numUtxos}</Text>
+          </Box>
+          <Text color="red">⚠ DUST not accruing — rate/fill data may be unreliable</Text>
+        </>
       ) : (
         <>
           <Box gap={2}>

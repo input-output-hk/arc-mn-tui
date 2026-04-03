@@ -1,11 +1,18 @@
 import React, {useState, useEffect} from 'react';
 import {Box, Text, useInput}         from 'ink';
-import SelectInput                   from 'ink-select-input';
+import TextInput                      from 'ink-text-input';
+import SelectInput                    from 'ink-select-input';
 import TxStatusComponent             from '../components/TxStatus.js';
 import DustMonitor                   from '../components/DustMonitor.js';
 import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 
-type Step = 'view' | 'confirm' | 'submitting';
+type Step =
+  | 'view'
+  | 'register-addr'
+  | 'register-confirm'
+  | 'registering'
+  | 'deregister-confirm'
+  | 'deregistering';
 
 interface Props {
   onComplete: () => void;
@@ -13,35 +20,84 @@ interface Props {
 }
 
 export default function Designate({onComplete, walletSync}: Props) {
-  const {balances, designateTxStatus, designate, resetDesignate} = walletSync;
+  const {
+    balances,
+    dustAddress,
+    designateTxStatus,
+    designate,
+    resetDesignate,
+    deregisterTxStatus,
+    deregister,
+    resetDeregister,
+  } = walletSync;
 
-  const [step, setStep] = useState<Step>('view');
+  const [step,            setStep]           = useState<Step>('view');
+  const [receiverDraft,   setReceiverDraft]  = useState('');
 
-  useEffect(() => { resetDesignate(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    resetDesignate();
+    resetDeregister();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pre-fill receiver address with the dust address when it becomes available.
+  useEffect(() => {
+    if (dustAddress && !receiverDraft) setReceiverDraft(dustAddress);
+  }, [dustAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useInput((_, key) => {
-    if (step === 'submitting') {
+    if (step === 'registering') {
       if ((designateTxStatus.stage === 'pending' || designateTxStatus.stage === 'failed') && key.return) {
         onComplete();
       }
       return;
     }
-    if (key.escape && step === 'confirm') setStep('view');
+    if (step === 'deregistering') {
+      if ((deregisterTxStatus.stage === 'pending' || deregisterTxStatus.stage === 'failed') && key.return) {
+        onComplete();
+      }
+      return;
+    }
+    if (key.escape) {
+      if (step === 'register-addr' || step === 'register-confirm' || step === 'deregister-confirm') {
+        setStep('view');
+      }
+    }
   });
 
-  async function handleConfirm() {
-    setStep('submitting');
-    await designate();
+  async function handleRegister() {
+    setStep('registering');
+    const addr = receiverDraft.trim() || dustAddress || undefined;
+    await designate(addr);
+  }
+
+  async function handleDeregister() {
+    setStep('deregistering');
+    await deregister();
   }
 
   const unregistered = balances?.unregisteredNightUtxos ?? 0;
+  const registered   = balances?.registeredNightUtxos   ?? 0;
 
-  if (step === 'submitting') {
+  // ── Registering ──────────────────────────────────────────────────────────
+  if (step === 'registering') {
     return (
       <Box flexDirection="column" gap={1}>
         <Text bold color="cyan">Designate NIGHT for DUST Generation</Text>
         <TxStatusComponent status={designateTxStatus} />
         {(designateTxStatus.stage === 'pending' || designateTxStatus.stage === 'failed') && (
+          <Text dimColor>Press Enter to return to dashboard.</Text>
+        )}
+      </Box>
+    );
+  }
+
+  // ── Deregistering ─────────────────────────────────────────────────────────
+  if (step === 'deregistering') {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text bold color="cyan">Designate NIGHT for DUST Generation</Text>
+        <TxStatusComponent status={deregisterTxStatus} />
+        {(deregisterTxStatus.stage === 'pending' || deregisterTxStatus.stage === 'failed') && (
           <Text dimColor>Press Enter to return to dashboard.</Text>
         )}
       </Box>
@@ -55,37 +111,65 @@ export default function Designate({onComplete, walletSync}: Props) {
       <DustMonitor
         balance={balances?.dust ?? null}
         generation={balances?.dustGeneration ?? null}
+        registeredNightUtxos={balances?.registeredNightUtxos ?? 0}
+        dustAccruing={balances?.dustAccruing ?? null}
       />
 
+      {/* View — main menu */}
       {step === 'view' && (
         <Box flexDirection="column" gap={1}>
-          {unregistered === 0 ? (
-            <Text dimColor>All NIGHT UTXOs are already registered for DUST generation.</Text>
-          ) : (
-            <Text dimColor>
-              {unregistered} NIGHT UTXO{unregistered !== 1 ? 's' : ''} not yet registered.
-            </Text>
-          )}
+          <Box gap={2}>
+            <Text dimColor>Unregistered: <Text color="white">{unregistered}</Text></Text>
+            <Text dimColor>Registered: <Text color="white">{registered}</Text></Text>
+          </Box>
           <SelectInput
             items={[
               ...(unregistered > 0
-                ? [{label: `Register ${unregistered} UTXO${unregistered !== 1 ? 's' : ''} for DUST`, value: 'designate'}]
+                ? [{label: `Register ${unregistered} UTXO${unregistered !== 1 ? 's' : ''} for DUST`, value: 'register'}]
+                : []),
+              ...(registered > 0
+                ? [{label: `Deregister ${registered} UTXO${registered !== 1 ? 's' : ''} from DUST`, value: 'deregister'}]
                 : []),
               {label: 'Back to dashboard', value: 'back'},
             ]}
             onSelect={item => {
-              if (item.value === 'designate') setStep('confirm');
+              if (item.value === 'register')   setStep('register-addr');
+              else if (item.value === 'deregister') setStep('deregister-confirm');
               else onComplete();
             }}
           />
         </Box>
       )}
 
-      {step === 'confirm' && (
+      {/* Register — receiver address */}
+      {step === 'register-addr' && (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>DUST receiver address</Text>
+          <Text dimColor>
+            DUST will accrue to this wallet address. Defaults to your own address.
+          </Text>
+          <Box gap={1}>
+            <Text>Address: </Text>
+            <TextInput
+              value={receiverDraft}
+              onChange={setReceiverDraft}
+              onSubmit={() => setStep('register-confirm')}
+              placeholder={dustAddress ?? 'dust bech32 address'}
+            />
+          </Box>
+          <Text dimColor>[Enter] next  [Esc] back</Text>
+        </Box>
+      )}
+
+      {/* Register — confirm */}
+      {step === 'register-confirm' && (
         <Box flexDirection="column" gap={1}>
           <Text bold>Confirm registration</Text>
           <Text dimColor>
             Register <Text color="white">{unregistered} NIGHT UTXO{unregistered !== 1 ? 's' : ''}</Text> for DUST generation.
+          </Text>
+          <Text dimColor>
+            DUST receiver: <Text color="white">{receiverDraft.trim() || dustAddress || '(own wallet)'}</Text>
           </Text>
           <Text dimColor>UTXOs remain in your wallet but are designated to accrue DUST.</Text>
           <SelectInput
@@ -94,7 +178,29 @@ export default function Designate({onComplete, walletSync}: Props) {
               {label: 'Cancel',   value: 'cancel'},
             ]}
             onSelect={item => {
-              if (item.value === 'confirm') void handleConfirm();
+              if (item.value === 'confirm') void handleRegister();
+              else setStep('view');
+            }}
+          />
+          <Text dimColor>[Esc] back</Text>
+        </Box>
+      )}
+
+      {/* Deregister — confirm */}
+      {step === 'deregister-confirm' && (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>Confirm deregistration</Text>
+          <Text dimColor>
+            Remove <Text color="white">{registered} NIGHT UTXO{registered !== 1 ? 's' : ''}</Text> from DUST generation.
+          </Text>
+          <Text dimColor>DUST will stop accruing for these UTXOs after the transaction confirms.</Text>
+          <SelectInput
+            items={[
+              {label: 'Deregister', value: 'confirm'},
+              {label: 'Cancel',     value: 'cancel'},
+            ]}
+            onSelect={item => {
+              if (item.value === 'confirm') void handleDeregister();
               else setStep('view');
             }}
           />

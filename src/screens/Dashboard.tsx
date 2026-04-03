@@ -78,13 +78,19 @@ export default function Dashboard({network, paused, walletSync}: Props) {
   const [clock, setClock]                    = useState(utcTime);
 
   const mnemonic = getMnemonic(activeIndex);
-  const {synced: walletSynced, balances, error: walletError} = walletSync;
+  const {synced: walletSynced, balances, error: walletError, refreshDustBalance} = walletSync;
 
   useEffect(() => {
     if (paused) return;
     const id = setInterval(() => setClock(utcTime()), 6_000);
     return () => clearInterval(id);
   }, [paused]);
+
+  // Refresh the live dust balance whenever the chain section updates so the
+  // two sections stay in sync without an independent timer in the wallet hook.
+  useEffect(() => {
+    refreshDustBalance();
+  }, [node]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -186,6 +192,8 @@ export default function Dashboard({network, paused, walletSync}: Props) {
       <DustMonitor
         balance={walletSync.balances?.dust ?? null}
         generation={walletSync.balances?.dustGeneration ?? null}
+        registeredNightUtxos={walletSync.balances?.registeredNightUtxos ?? 0}
+        dustAccruing={walletSync.balances?.dustAccruing ?? null}
       />
 
     </Box>
