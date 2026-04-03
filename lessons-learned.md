@@ -178,6 +178,28 @@ deleted and a fresh sync starts.
 
 ---
 
+## 10. Shielded batch transfers of multiple token types fail with `Wallet.InsufficientFunds`
+
+**Problem:** Calling `facade.transferTransaction` with multiple entries (each with a
+different shielded token ID) fails with `Wallet.InsufficientFunds` thrown inside
+`wallet-sdk-shielded/dist/v1/Transacting.js`. The same call succeeds when only one
+token type is included. All SDK reference examples use a single token type per call.
+
+**Likely cause:** The shielded ZK circuit has a fixed number of coin-input slots.
+Batching N different token types requires N independent coin selections; once the
+total exceeds the circuit capacity the coin selector throws `InsufficientFunds`.
+
+**Status:** Confirmed on preprod. Batches of 1 or 2 shielded token types succeed;
+5 fail. Lace does not support multi-token transfers so cross-app comparison was not
+possible. DUST balance is not the cause (wallet had ample DUST). The threshold
+between 2 (works) and 5 (fails) is unknown; 3 distinct shielded token types in one
+batch is the untested boundary.
+
+**Workaround:** Keep batches to at most two distinct shielded token types. The TUI
+shows a warning when a draft batch exceeds this limit.
+
+---
+
 ## 9. `deployContract` requires a `levelPrivateStateProvider` even for simple contracts
 
 **Problem:** The `deployContract` helper from `@midnight-ntwrk/midnight-js-contracts`

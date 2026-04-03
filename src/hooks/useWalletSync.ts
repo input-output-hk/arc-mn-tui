@@ -478,17 +478,15 @@ export function useWalletSync(
             });
           },
           error: (e: unknown) => {
-            if (!cancelled) setSyncState({
-              synced: false, balances: null,
-              error: e instanceof Error ? e.message : String(e),
-            });
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.error('Wallet sync error', e);
+            if (!cancelled) setSyncState({ synced: false, balances: null, error: msg });
           },
         });
       } catch (e) {
-        if (!cancelled) setSyncState({
-          synced: false, balances: null,
-          error: e instanceof Error ? e.message : String(e),
-        });
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.error('Wallet sync start failed', e);
+        if (!cancelled) setSyncState({ synced: false, balances: null, error: msg });
       }
     }
 
@@ -555,6 +553,7 @@ export function useWalletSync(
     const dk = dustKeyRef.current;
     const ks = keystoreRef.current;
     if (!f || !sk || !dk || !ks) {
+      logger.warn('Send: wallet not connected');
       setTxStatus({stage: 'failed', error: 'Wallet not connected'});
       return;
     }
@@ -601,7 +600,9 @@ export function useWalletSync(
         );
       }
     } catch (e) {
-      setTxStatus({stage: 'failed', error: e instanceof Error ? e.message : String(e)});
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error(`Send failed: ${msg}`, e);
+      setTxStatus({stage: 'failed', error: msg});
     }
   }, []);
 
@@ -618,6 +619,7 @@ export function useWalletSync(
     const ks  = keystoreRef.current;
     const net = networkRef.current;
     if (!f || !sk || !dk || !ks) {
+      logger.warn('Deploy: wallet not connected');
       setDeployTxStatus({stage: 'failed', error: 'Wallet not connected'});
       return;
     }
@@ -627,6 +629,7 @@ export function useWalletSync(
       const absManaged  = path.resolve(managedPath);
       const contractJs  = path.join(absManaged, 'contract', 'index.js');
       if (!fs.existsSync(contractJs)) {
+        logger.warn(`Deploy: no compiled contract at ${contractJs}`);
         setDeployTxStatus({stage: 'failed', error: `No compiled contract at ${contractJs}`});
         return;
       }
@@ -851,6 +854,7 @@ export function useWalletSync(
     const ks  = keystoreRef.current;
     const net = networkRef.current;
     if (!f || !sk || !dk || !ks) {
+      logger.warn('Mint: wallet not connected');
       setMintTxStatus({stage: 'failed', error: 'Wallet not connected'});
       return;
     }
@@ -979,6 +983,7 @@ export function useWalletSync(
     const sk = shieldedKeysRef.current;
     const dk = dustKeyRef.current;
     if (!f || !ks || !sk || !dk) {
+      logger.warn('Designate: wallet not connected');
       setDesignateTxStatus({stage: 'failed', error: 'Wallet not connected'});
       return;
     }
@@ -997,6 +1002,7 @@ export function useWalletSync(
         (c: any) => !c.meta?.registeredForDustGeneration) as any[];
 
       if (utxos.length === 0) {
+        logger.warn('Designate: no unregistered NIGHT UTXOs found');
         setDesignateTxStatus({stage: 'failed', error: 'No unregistered NIGHT UTXOs found'});
         return;
       }
@@ -1041,6 +1047,7 @@ export function useWalletSync(
     const sk = shieldedKeysRef.current;
     const dk = dustKeyRef.current;
     if (!f || !ks || !sk || !dk) {
+      logger.warn('Deregister: wallet not connected');
       setDeregisterTxStatus({stage: 'failed', error: 'Wallet not connected'});
       return;
     }
@@ -1058,6 +1065,7 @@ export function useWalletSync(
         (c: any) => c.meta?.registeredForDustGeneration === true) as any[];
 
       if (utxos.length === 0) {
+        logger.warn('Deregister: no registered NIGHT UTXOs found');
         setDeregisterTxStatus({stage: 'failed', error: 'No registered NIGHT UTXOs found'});
         return;
       }

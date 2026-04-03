@@ -120,14 +120,21 @@ export default function Send({onComplete, walletSync, onWorkInProgress}: Props) 
 
   const available = useMemo((): TokenChoice[] => {
     if (!balances) return [];
+    // Subtract amounts already committed in the current batch from each token's balance.
+    const committed = new Map<string, bigint>();
+    for (const d of drafts) {
+      const key = d.type + ':' + d.tokenId;
+      committed.set(key, (committed.get(key) ?? 0n) + d.amount);
+    }
     const tokens: TokenChoice[] = [];
     const addGroup = (type: 'shielded' | 'unshielded', rec: Record<string, bigint>) => {
       // NIGHT first, then other tokens alphabetically.
       const sorted = Object.entries(rec).sort(([a], [b]) =>
         a === NIGHT_ID ? -1 : b === NIGHT_ID ? 1 : a.localeCompare(b));
       for (const [id, amt] of sorted) {
-        if (amt > 0n) tokens.push({
-          type, tokenId: id, max: amt,
+        const net = amt - (committed.get(type + ':' + id) ?? 0n);
+        if (net > 0n) tokens.push({
+          type, tokenId: id, max: net,
           label: `${tokenLabel(id)} (${type})`,
         });
       }
@@ -135,7 +142,7 @@ export default function Send({onComplete, walletSync, onWorkInProgress}: Props) 
     addGroup('unshielded', balances.unshielded);
     addGroup('shielded',   balances.shielded);
     return tokens;
-  }, [balances]);
+  }, [balances, drafts]);
 
   // ── Action handlers ──
 
@@ -260,6 +267,9 @@ export default function Send({onComplete, walletSync, onWorkInProgress}: Props) 
                   <Text color="white">{d.amtStr}</Text>
                 </Box>
               ))}
+              {new Set(drafts.filter(d => d.type === 'shielded').map(d => d.tokenId)).size >= 2 && (
+                <Text color="yellow">⚠ Batching more than two shielded token types may fail due to ZK circuit or balancing limitations.</Text>
+              )}
             </Box>
           )}
 
@@ -283,6 +293,9 @@ export default function Send({onComplete, walletSync, onWorkInProgress}: Props) 
       {/* ── Token selection ───────────────────────────────────────────── */}
       {step === 'token' && (
         <Box flexDirection="column" gap={1}>
+          {new Set(drafts.filter(d => d.type === 'shielded').map(d => d.tokenId)).size >= 2 && (
+            <Text color="yellow">⚠ Already 2 shielded token types queued — adding a third may fail due to ZK circuit limits.</Text>
+          )}
           <Text>Select token to send:</Text>
           {available.length === 0 ? (
             <Text color="yellow">No tokens available to send.</Text>
