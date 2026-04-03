@@ -1,6 +1,6 @@
 # mn-tui — Midnight Terminal UI
 
-A terminal-based wallet and contract tool for the Midnight network.
+A terminal-based wallet and contract tool for the Midnight network. A [video demonstration](https://drive.google.com/file/d/1xBTYuUffC7A7F4qkdsLansyHVAMuP7wp/view?usp=sharing) is availble.
 
 > **Warning:** Only minimal quality assurance has been performed on this application.
 
