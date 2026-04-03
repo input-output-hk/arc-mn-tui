@@ -30,6 +30,7 @@ export default function App() {
   const [lineCount,         setLineCount]        = useState(() => logger.lineCount);
   const [lastSeenLineCount, setLastSeenLineCount] = useState(() => logger.lineCount);
   const [menuActive,        setMenuActive]       = useState(false);
+  const [workInProgress,    setWorkInProgress]   = useState(false);
 
   const {activeIndex, getMnemonic, setNetwork} = useWallet();
   const mnemonic   = getMnemonic(activeIndex);
@@ -48,10 +49,11 @@ export default function App() {
     if (!key.meta) return;
     if (input === 'q') { exit(); return; }
     if (input === 'p') { setPaused(p => !p); return; }
-    if (input === 'm') { setMenuActive(a => !a); return; }
+    if (input === 'm' && !workInProgress) { setMenuActive(a => !a); return; }
   });
 
   const navigate = (s: Screen) => {
+    setWorkInProgress(false);
     if (s === 'logs') setLastSeenLineCount(logger.lineCount);
     setScreen(s);
   };
@@ -94,6 +96,7 @@ export default function App() {
         hasNewLogs={lineCount > lastSeenLineCount}
         menuActive={menuActive}
         onMenuToggle={() => setMenuActive(a => !a)}
+        locked={workInProgress}
       />
 
       {/* Active screen */}
@@ -106,18 +109,23 @@ export default function App() {
           />
         )}
         {screen === 'dashboard' && <Dashboard network={network} paused={paused} walletSync={walletSync} />}
-        {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} />}
-        {screen === 'mint'      && <Mint      onComplete={toDash} walletSync={walletSync} />}
+        {screen === 'send'      && <Send      onComplete={toDash} walletSync={walletSync} onWorkInProgress={setWorkInProgress} />}
+        {screen === 'mint'      && <Mint      onComplete={toDash} walletSync={walletSync} onWorkInProgress={setWorkInProgress} />}
         {screen === 'contract'  && <Contract  network={network} />}
-        {screen === 'deploy'    && <Deploy    onComplete={toDash} walletSync={walletSync} />}
+        {screen === 'deploy'    && <Deploy    onComplete={toDash} walletSync={walletSync} onWorkInProgress={setWorkInProgress} />}
         {screen === 'keys'      && <Keys network={network} />}
-        {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} />}
+        {screen === 'designate' && <Designate onComplete={toDash} walletSync={walletSync} onWorkInProgress={setWorkInProgress} />}
         {screen === 'logs'      && <Logs />}
       </Box>
 
       {/* Footer */}
       <Box justifyContent="center">
         <Text color="yellow" bold>⚠️  Only minimal quality assurance has been performed on this app.  ⚠️</Text>
+      </Box>
+
+      {/* Source URL */}
+      <Box justifyContent="center">
+        <Text dimColor>https://github.com/input-output-hk/arc-nearfall-evaluation/tree/main/experiments/mn-tui/</Text>
       </Box>
 
     </Box>

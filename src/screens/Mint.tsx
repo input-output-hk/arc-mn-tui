@@ -8,11 +8,12 @@ import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 type Step = 'contract' | 'deploying' | 'amount' | 'confirm' | 'minting';
 
 interface Props {
-  onComplete: () => void;
-  walletSync: WalletSyncState;
+  onComplete:        () => void;
+  walletSync:        WalletSyncState;
+  onWorkInProgress?: (wip: boolean) => void;
 }
 
-export default function Mint({onComplete, walletSync}: Props) {
+export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) {
   const {mintTxStatus, mintResult, mint, resetMint, deployFT} = walletSync;
 
   const [step,            setStep]            = useState<Step>('contract');
@@ -21,6 +22,12 @@ export default function Mint({onComplete, walletSync}: Props) {
   const [deployError,     setDeployError]     = useState<string | null>(null);
 
   useEffect(() => { resetMint(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Notify parent when past the initial contract-address entry step.
+  useEffect(() => {
+    onWorkInProgress?.(step !== 'contract');
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onWorkInProgress?.(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useInput((_, key) => {
     if (step === 'minting') {

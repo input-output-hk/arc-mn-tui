@@ -20,9 +20,10 @@ interface Props {
   hasNewLogs:   boolean;
   menuActive:   boolean;
   onMenuToggle: () => void;
+  locked?:      boolean;
 }
 
-export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, onMenuToggle}: Props) {
+export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, onMenuToggle, locked}: Props) {
   useInput((input) => {
     if (/^[0-8]$/.test(input)) {
       onNavigate(SCREEN_ITEMS[parseInt(input, 10)].screen);
@@ -52,7 +53,10 @@ export default function NavMenu({current, onNavigate, hasNewLogs, menuActive, on
           )}
         </Box>
       ))}
-      <Text dimColor>{menuActive ? '[0-8 navigate]' : '[M-m]'}</Text>
+      {locked
+        ? <Text color="yellow">[nav locked — Esc to cancel]</Text>
+        : <Text dimColor>{menuActive ? '[0-8 navigate]' : '[M-m]'}</Text>
+      }
     </Box>
   );
 }

@@ -46,7 +46,13 @@ export default function DustMonitor({balance, generation, registeredNightUtxos, 
   // last ~60 s.  This is the fingerprint of a cross-wallet registration whose
   // cancellation event hasn't propagated yet, or a filled-but-still-registered
   // UTXO set.  Hide the misleading rate/fill-time and show a warning instead.
-  const staleGeneration = generation !== null && dustAccruing === false;
+  //
+  // Exception: if the current balance is at or above the generation limit the
+  // wallet is legitimately over-cap (e.g. NIGHT was sent away, lowering the
+  // limit below the existing balance).  In that case DUST is correctly decaying
+  // to the new equilibrium and no warning should be shown.
+  const overCap         = balance !== null && generation !== null && balance >= generation.limit;
+  const staleGeneration = generation !== null && dustAccruing === false && !overCap;
 
   return (
     <Box flexDirection="column" borderStyle="single" paddingX={1}>

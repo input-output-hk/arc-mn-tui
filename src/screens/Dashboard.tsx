@@ -130,7 +130,7 @@ export default function Dashboard({network, paused, walletSync}: Props) {
       <Box flexDirection="column" borderStyle="single" paddingX={1}>
         <Text bold color="cyan">Wallet</Text>
         {!activeWallet ? (
-          <Text color="yellow">No wallet loaded — open Keys screen (5)</Text>
+          <Text color="yellow">No wallet loaded — open Keys screen (M-m 7)</Text>
         ) : (
           <>
             <Text dimColor>name        <Text color="white">{activeWallet.name}</Text></Text>
@@ -157,7 +157,7 @@ export default function Dashboard({network, paused, walletSync}: Props) {
         ) : !activeWallet ? (
           <Text dimColor>—</Text>
         ) : !mnemonic ? (
-          <Text dimColor color="yellow">locked — unlock in Keys (5)</Text>
+          <Text dimColor color="yellow">locked — unlock in Keys (M-m 7)</Text>
         ) : !balances ? (
           <Text dimColor>awaiting sync…</Text>
         ) : (

@@ -5,6 +5,7 @@ import SelectInput                    from 'ink-select-input';
 import TxStatusComponent             from '../components/TxStatus.js';
 import DustMonitor                   from '../components/DustMonitor.js';
 import type {WalletSyncState}        from '../hooks/useWalletSync.js';
+import {useWallet}                   from '../hooks/useWallet.js';
 
 type Step =
   | 'view'
@@ -15,11 +16,12 @@ type Step =
   | 'deregistering';
 
 interface Props {
-  onComplete: () => void;
-  walletSync: WalletSyncState;
+  onComplete:        () => void;
+  walletSync:        WalletSyncState;
+  onWorkInProgress?: (wip: boolean) => void;
 }
 
-export default function Designate({onComplete, walletSync}: Props) {
+export default function Designate({onComplete, walletSync, onWorkInProgress}: Props) {
   const {
     balances,
     dustAddress,
@@ -30,6 +32,7 @@ export default function Designate({onComplete, walletSync}: Props) {
     deregister,
     resetDeregister,
   } = walletSync;
+  const {wallets} = useWallet();
 
   const [step,            setStep]           = useState<Step>('view');
   const [receiverDraft,   setReceiverDraft]  = useState('');
@@ -38,6 +41,12 @@ export default function Designate({onComplete, walletSync}: Props) {
     resetDesignate();
     resetDeregister();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Notify parent when the user has entered the registration flow.
+  useEffect(() => {
+    onWorkInProgress?.(step !== 'view');
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onWorkInProgress?.(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-fill receiver address with the dust address when it becomes available.
   useEffect(() => {
@@ -63,6 +72,14 @@ export default function Designate({onComplete, walletSync}: Props) {
       }
     }
   });
+
+  function handleReceiverSubmit() {
+    const rawInput = receiverDraft.trim();
+    // Allow a local wallet name as shorthand for its dust address.
+    const nameMatch = wallets.find(w => w.name.toLowerCase() === rawInput.toLowerCase());
+    if (nameMatch?.dust) setReceiverDraft(nameMatch.dust);
+    setStep('register-confirm');
+  }
 
   async function handleRegister() {
     setStep('registering');
@@ -149,14 +166,27 @@ export default function Designate({onComplete, walletSync}: Props) {
             DUST will accrue to this wallet address. Defaults to your own address.
           </Text>
           <Box gap={1}>
-            <Text>Address: </Text>
+            <Text>Address or wallet name: </Text>
             <TextInput
               value={receiverDraft}
               onChange={setReceiverDraft}
-              onSubmit={() => setStep('register-confirm')}
-              placeholder={dustAddress ?? 'dust bech32 address'}
+              onSubmit={handleReceiverSubmit}
+              placeholder={dustAddress ?? 'dust address or wallet name'}
             />
           </Box>
+          {wallets.some(w => w.dust) && (
+            <Box flexDirection="column">
+              <Text dimColor>Saved wallets:</Text>
+              {wallets
+                .filter(w => w.dust)
+                .map((w, i) => (
+                  <Box key={i} gap={2}>
+                    <Box width={20}><Text dimColor>{w.name}</Text></Box>
+                    <Text dimColor>{w.dust}</Text>
+                  </Box>
+                ))}
+            </Box>
+          )}
           <Text dimColor>[Enter] next  [Esc] back</Text>
         </Box>
       )}
