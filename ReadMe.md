@@ -6,6 +6,20 @@ A terminal-based wallet and contract tool for the Midnight network.
 
 ## Starting the Application
 
+**Via Nix** (recommended — no local Node.js install required):
+
+```
+nix run github:input-output-hk/arc-nearfall-eval#mn-tui
+```
+
+or, from a local checkout of the repository:
+
+```
+nix run .#mn-tui
+```
+
+**Via npm:**
+
 ```
 npm start
 ```
@@ -18,6 +32,8 @@ npx tsx src/index.tsx
 
 Node.js 20+ is required. The first launch will create `~/.mn-tui-config.json` for
 configuration persistence and `~/.cache/mn-tui/` for wallet sync state caching.
+On first launch (no config file present) the app opens directly on the Network
+Configuration screen so you can select a network before anything else.
 
 ## Global Shortcuts
 

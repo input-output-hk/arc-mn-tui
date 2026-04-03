@@ -1,4 +1,4 @@
-import {readFileSync, writeFileSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {homedir}                     from 'os';
 import {join}                        from 'path';
 import type {NetworkName, NetworkConfig} from './types.js';
@@ -169,6 +169,10 @@ export function loadConfig(): PersistedConfig {
   } catch {
     return {...DEFAULTS};
   }
+}
+
+export function configFileExists(): boolean {
+  return existsSync(CONFIG_PATH);
 }
 
 export function saveConfig(cfg: PersistedConfig): void {

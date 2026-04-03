@@ -11,7 +11,7 @@ import Keys      from './screens/Keys.js';
 import Designate from './screens/Designate.js';
 import Logs      from './screens/Logs.js';
 import type {Screen, NetworkConfig} from './types.js';
-import {loadConfig, saveConfig, buildNetworkConfig} from './config.js';
+import {loadConfig, saveConfig, buildNetworkConfig, configFileExists} from './config.js';
 import {useWallet}                  from './hooks/useWallet.js';
 import {useWalletSync}              from './hooks/useWalletSync.js';
 import {logger}                    from './logger.js';
@@ -21,7 +21,7 @@ export default function App() {
   const {exit}   = useApp();
   const {stdout} = useStdout();
 
-  const [screen,            setScreen]           = useState<Screen>('dashboard');
+  const [screen,            setScreen]           = useState<Screen>(() => configFileExists() ? 'dashboard' : 'network');
   const [network,           setNetworkConfig]     = useState<NetworkConfig>(() => {
     const cfg = loadConfig();
     return buildNetworkConfig(cfg.lastNetwork, cfg.networkOverrides);
