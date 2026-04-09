@@ -200,6 +200,29 @@ shows a warning when a draft batch exceeds this limit.
 
 ---
 
+## 11. Compact `assert` syntax: parentheses and comma are required
+
+**Problem:** Compact's `assert` statement requires parentheses around the condition
+and a comma before the message string:
+
+```compact
+assert(condition, "message");
+```
+
+Writing `assert condition "message"` (no parens, no comma) is a parse error.
+Additionally, Compact does not have a `!` unary boolean negation operator — use
+`== false` instead:
+
+```compact
+// Wrong — two separate errors:
+assert !device_registered "device already registered";
+
+// Correct:
+assert(device_registered == false, "device already registered");
+```
+
+---
+
 ## 9. `deployContract` requires a `levelPrivateStateProvider` even for simple contracts
 
 **Problem:** The `deployContract` helper from `@midnight-ntwrk/midnight-js-contracts`
@@ -211,3 +234,16 @@ when the contract deployment tries to write its initial private state.
 contract address or a temp dir. In `useWalletSync.ts` we use
 `os.tmpdir() + '/mn-tui-private-state'` as a throw-away store since we don't need
 to query private contract state after deployment.
+
+**Note (newer SDK versions):** Later releases of this package added two further
+required options that throw if absent:
+
+- `privateStoragePasswordProvider: () => string` — returns a password (≥ 16 chars)
+  for encrypting the LevelDB store.
+- `accountId: string` — a wallet identifier to scope storage and prevent
+  cross-account data access.
+
+The wallet's unshielded Bech32 address satisfies both: it is deterministic, always
+≥ 16 characters, and wallet-specific. Call `.toString()` explicitly —
+`getBech32Address()` returns an address object, not a plain string, and the SDK
+calls `.trim()` on these values which will throw if they are not primitives.
