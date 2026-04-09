@@ -185,10 +185,10 @@ encountered during development and their workarounds.
 
 ---
 
-## Web and Mobile Portability
+## Portability
 
-The application is architecturally well-suited for migration to a web or mobile UI because
-the business logic is cleanly separated from the terminal rendering layer.
+The application is architecturally well-suited for migration to other UIs or consumption
+as a library because the business logic is cleanly separated from the terminal rendering layer.
 
 **Layer separation:**
 
@@ -199,6 +199,28 @@ the business logic is cleanly separated from the terminal rendering layer.
 - **Screen and component files (`src/screens/`, `src/components/`)** — pure Ink
   rendering; never import the Midnight SDK or RxJS directly. They receive state and
   callbacks through hook return values only.
+
+**CLI tool** — the highest-leverage path for scripting and automation. Because the hooks
+layer already encapsulates every Midnight SDK operation as a standalone async function or
+observable, each screen's logic can be extracted into a command with minimal effort:
+
+- A thin `commander` or `yargs` entry point replaces `src/index.tsx`; each subcommand
+  (`send`, `mint`, `deploy`, `designate`, `balance`, …) calls the relevant hook logic
+  directly and exits.
+- Wallet unlock already handles passphrase input; in a CLI context the passphrase can be
+  supplied via `--passphrase`, an environment variable, or a pinentry prompt, removing
+  the Ink UI dependency entirely.
+- The config and cache modules (`config.ts`, `walletCache.ts`) are plain filesystem
+  abstractions and need no changes.
+- ZK proof generation is a blocking async call today; for CLI batch use it is idiomatic
+  to surface progress via stderr and the result via stdout, which requires only wrapping
+  the existing promise.
+- The main constraint is that proof generation requires the proof server to be reachable;
+  this is no different from the TUI requirement and is already configurable via the
+  network config.
+
+A CLI build would be useful for test automation, CI pipelines, and scripted load testing
+against preprod — all current gaps in the Midnight developer tooling ecosystem.
 
 **Web app migration** — realistic with modest effort:
 
