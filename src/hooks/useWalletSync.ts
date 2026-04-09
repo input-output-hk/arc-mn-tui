@@ -590,6 +590,9 @@ export function useWalletSync(
 
       // Log the completed transfer for audit purposes.
       const from = walletAddrRef.current ?? 'unknown';
+      if (requests.length === 0) {
+        logger.info(`Transfer: empty bundle (DUST fee only) from ${from} | txHash: ${txHash}`);
+      }
       for (const r of requests) {
         const night_id = '0'.repeat(64);
         const amtDisplay = r.tokenId === night_id

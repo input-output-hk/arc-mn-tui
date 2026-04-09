@@ -275,9 +275,12 @@ export default function Send({onComplete, walletSync, onWorkInProgress}: Props) 
 
           <SelectInput
             items={[
-              ...(drafts.length > 0
-                ? [{label: `Confirm & send (${drafts.length} transfer${drafts.length > 1 ? 's' : ''})`, value: 'send'}]
-                : []),
+              {
+                label: drafts.length > 0
+                  ? `Confirm & send (${drafts.length} transfer${drafts.length > 1 ? 's' : ''})`
+                  : 'Send empty transaction (DUST fee only — for benchmarking)',
+                value: 'send',
+              },
               {label: available.length > 0 ? 'Add transfer' : 'Add transfer (no tokens available)', value: 'add'},
               {label: 'Back to dashboard', value: 'back'},
             ]}
