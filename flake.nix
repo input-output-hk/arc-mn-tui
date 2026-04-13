@@ -74,6 +74,7 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            altair
             binaryen
             bubblewrap
           # calibre
