@@ -8,7 +8,8 @@
     "start": "tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tps": "tsx src/night-tps.ts"
   },
   "files": [
     "dist/",
