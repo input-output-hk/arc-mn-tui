@@ -6,9 +6,15 @@ import { Buffer }                                        from 'buffer';
 import { WebSocket }                                     from 'ws';
 import * as Rx                                           from 'rxjs';
 import * as bip39                                        from 'bip39';
-import * as ledger                                       from '@midnight-ntwrk/ledger-v7';
+import * as ledger                                       from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade }                                  from '@midnight-ntwrk/wallet-sdk-facade';
 import { DustWallet }                                    from '@midnight-ntwrk/wallet-sdk-dust-wallet';
+import {
+  DustAddress,
+  MidnightBech32m,
+  ShieldedAddress,
+  UnshieldedAddress,
+}                                                        from '@midnight-ntwrk/wallet-sdk-address-format';
 import { ShieldedWallet }                                from '@midnight-ntwrk/wallet-sdk-shielded';
 import {
   createKeystore,
@@ -31,17 +37,6 @@ import { logger }                                       from '../logger.js';
 // Allow the wallet SDK to use WebSocket for GraphQL subscriptions.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).WebSocket = WebSocket;
-
-// Workaround for ledger-v7 7.0.0/7.0.1 bug: MerkleTree::collapse panics on non-empty
-// trees when producing shielded outputs. See: https://github.com/geofflittle/tryapply-crash-repro
-const _origTryApply = ledger.ZswapChainState.prototype.tryApply;
-ledger.ZswapChainState.prototype.tryApply = function (...args: unknown[]) {
-  try {
-    return _origTryApply.apply(this, args as any);
-  } catch {
-    return [this, new Map()];
-  }
-};
 
 /** Built-in fungible-token managed/ directory, resolved relative to this module. */
 const BUILTIN_FT_MANAGED = fileURLToPath(
@@ -301,64 +296,82 @@ export function useWalletSync(
         };
 
         // Attempt to restore each wallet from cache; fall back to fresh start on failure.
+        // Casts are required because wallet configs changed in SDK v2/v3: individual wallets
+        // now receive only the fields they need; extra fields are ignored at runtime.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const shieldedWallet = (() => {
           const saved = loadState(network.name, unshieldedAddr, 'shielded');
           if (saved) {
-            try { return ShieldedWallet(walletCfg).restore(saved); }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            try { return (ShieldedWallet as any)(walletCfg).restore(saved); }
             catch {
               logger.warn('Shielded wallet state restore failed — evicting cache and starting fresh');
               deleteState(network.name, unshieldedAddr, 'shielded');
             }
           }
-          return ShieldedWallet(walletCfg).startWithSecretKeys(shieldedSecretKeys);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (ShieldedWallet as any)(walletCfg).startWithSecretKeys(shieldedSecretKeys);
         })();
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const unshieldedWallet = (() => {
+          const unshieldedCfg = {
+            networkId:               network.name,
+            indexerClientConnection: walletCfg.indexerClientConnection,
+            txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
+          };
           const saved = loadState(network.name, unshieldedAddr, 'unshielded');
           if (saved) {
             try {
-              return UnshieldedWallet({
-                networkId:               network.name,
-                indexerClientConnection: walletCfg.indexerClientConnection,
-                txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
-              }).restore(saved);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              return (UnshieldedWallet as any)(unshieldedCfg).restore(saved);
             } catch {
               logger.warn('Unshielded wallet state restore failed — evicting cache and starting fresh');
               deleteState(network.name, unshieldedAddr, 'unshielded');
             }
           }
-          return UnshieldedWallet({
-            networkId:               network.name,
-            indexerClientConnection: walletCfg.indexerClientConnection,
-            txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
-          }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore));
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (UnshieldedWallet as any)(unshieldedCfg).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore));
         })();
 
+        const dustCostParameters = {
+          additionalFeeOverhead: 300_000_000_000_000n,
+          feeBlocksMargin:       5,
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const dustWallet = (() => {
+          // DustWallet v3 needs {networkId, costParameters, indexerClientConnection}.
+          // The exported DefaultDustConfiguration type omits indexerClientConnection but the
+          // runtime sync service accesses it directly; omitting it causes a crash on first sync.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const dustCfg: any = {
+            networkId:               network.name,
+            costParameters:          dustCostParameters,
+            indexerClientConnection: walletCfg.indexerClientConnection,
+          };
           const saved = loadState(network.name, unshieldedAddr, 'dust');
           if (saved) {
-            try { return DustWallet({
-              ...walletCfg,
-              costParameters: {
-                additionalFeeOverhead: 300_000_000_000_000n,
-                feeBlocksMargin:       5,
-              },
-            }).restore(saved); }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            try { return (DustWallet as any)(dustCfg).restore(saved); }
             catch {
               logger.warn('Dust wallet state restore failed — evicting cache and starting fresh');
               deleteState(network.name, unshieldedAddr, 'dust');
             }
           }
-          return DustWallet({
-            ...walletCfg,
-            costParameters: {
-              additionalFeeOverhead: 300_000_000_000_000n,
-              feeBlocksMargin:       5,
-            },
-          }).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (DustWallet as any)(dustCfg).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
         })();
 
-        facade = new WalletFacade(shieldedWallet, unshieldedWallet, dustWallet);
+        // Dust address is deterministic from the key; compute once rather than watching the state.
+        setDustAddress(DustAddress.encodePublicKey(network.name, dustSecretKey.publicKey));
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        facade = await (WalletFacade as any).init({
+          configuration: { ...walletCfg, costParameters: dustCostParameters } as any,
+          shielded:   () => shieldedWallet,
+          unshielded: () => unshieldedWallet,
+          dust:       () => dustWallet,
+        });
         await facade.start(shieldedSecretKeys, dustSecretKey);
 
         // Expose for the stable send() callback.
@@ -413,10 +426,6 @@ export function useWalletSync(
         ).subscribe({
           next: (s) => {
             if (cancelled || pausedRef.current) return;
-            // Capture the dust address on first state emission (deterministic from key).
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const addr: string | undefined = (s.dust as any).dustAddress;
-            if (addr) setDustAddress(addr);
             // Save state once when the wallet first reaches fully-synced.
             if (s.isSynced === true && !stateSaved) {
               stateSaved = true;
@@ -428,7 +437,7 @@ export function useWalletSync(
             // call walletBalance(new Date()) between state emissions.
             dustStateRef.current = s.dust;
             // Compute dust balance and update rolling sample history.
-            const dustBalance = s.dust.walletBalance(now) as bigint;
+            const dustBalance = s.dust.balance(now);
             {
               const ts = now.getTime();
               dustBalanceSamplesRef.current.push({ts, balance: dustBalance});
@@ -525,7 +534,7 @@ export function useWalletSync(
     const dustState = dustStateRef.current;
     if (!dustState) return;
     const now         = new Date();
-    const dustBalance = dustState.walletBalance(now) as bigint;
+    const dustBalance = dustState.balance(now);
     const ts          = now.getTime();
     const samples     = dustBalanceSamplesRef.current;
     samples.push({ts, balance: dustBalance});
@@ -548,10 +557,11 @@ export function useWalletSync(
   const resetTx = useCallback(() => setTxStatus({stage: 'idle'}), []);
 
   const send = useCallback(async (requests: SendRequest[]): Promise<void> => {
-    const f  = facadeRef.current;
-    const sk = shieldedKeysRef.current;
-    const dk = dustKeyRef.current;
-    const ks = keystoreRef.current;
+    const f   = facadeRef.current;
+    const sk  = shieldedKeysRef.current;
+    const dk  = dustKeyRef.current;
+    const ks  = keystoreRef.current;
+    const net = networkRef.current;
     if (!f || !sk || !dk || !ks) {
       logger.warn('Send: wallet not connected');
       setTxStatus({stage: 'failed', error: 'Wallet not connected'});
@@ -561,10 +571,15 @@ export function useWalletSync(
       setTxStatus({stage: 'building'});
 
       // Group outputs by transfer type for the SDK.
-      const grouped = new Map<string, {type: string; amount: bigint; receiverAddress: string}[]>();
+      // receiverAddress must be a parsed address object, not a plain string.
+      const grouped = new Map<string, {type: string; amount: bigint; receiverAddress: UnshieldedAddress | ShieldedAddress}[]>();
       for (const r of requests) {
         const out = grouped.get(r.type) ?? [];
-        out.push({type: r.tokenId, amount: r.amount, receiverAddress: r.to});
+        const parsed = MidnightBech32m.parse(r.to);
+        const receiverAddress = r.type === 'unshielded'
+          ? parsed.decode(UnshieldedAddress, net.name)
+          : parsed.decode(ShieldedAddress, net.name);
+        out.push({type: r.tokenId, amount: r.amount, receiverAddress});
         grouped.set(r.type, out);
       }
       const transfers = [...grouped.entries()].map(([type, outputs]) => ({type, outputs}));
@@ -679,11 +694,13 @@ export function useWalletSync(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const providers: any = {
-        privateStateProvider: levelPrivateStateProvider({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        privateStateProvider: (levelPrivateStateProvider as any)({
           // Wallet-specific LevelDB dir prevents AES-GCM failures when switching wallets.
-          midnightDbName:       path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
-          privateStateStoreName: contractName + '-state',
-          walletProvider,
+          midnightDbName:                 path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
+          privateStateStoreName:          contractName + '-state',
+          privateStoragePasswordProvider: () => walletAddrRef.current!,
+          accountId:                      walletAddrRef.current!,
         }),
         publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
         zkConfigProvider:   zkCfgProvider,
@@ -797,10 +814,12 @@ export function useWalletSync(
     const zkCfgProvider  = new NodeZkConfigProvider(absManaged);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const providers: any = {
-      privateStateProvider: levelPrivateStateProvider({
-        midnightDbName:        path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
-        privateStateStoreName: 'fungible-token-state',
-        walletProvider,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      privateStateProvider: (levelPrivateStateProvider as any)({
+        midnightDbName:                 path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
+        privateStateStoreName:          'fungible-token-state',
+        privateStoragePasswordProvider: () => walletAddrRef.current!,
+        accountId:                      walletAddrRef.current!,
       }),
       publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
       zkConfigProvider:   zkCfgProvider,
@@ -907,11 +926,13 @@ export function useWalletSync(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const providers: any = {
-        privateStateProvider: levelPrivateStateProvider({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        privateStateProvider: (levelPrivateStateProvider as any)({
           // Wallet-specific LevelDB dir prevents AES-GCM failures when switching wallets.
-          midnightDbName:       path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
-          privateStateStoreName: 'fungible-token-state',
-          walletProvider,
+          midnightDbName:                 path.join(CACHE_DIR, 'level-db', net.name, encPublicKey.slice(0, 16)),
+          privateStateStoreName:          'fungible-token-state',
+          privateStoragePasswordProvider: () => walletAddrRef.current!,
+          accountId:                      walletAddrRef.current!,
         }),
         publicDataProvider: indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
         zkConfigProvider:   zkCfgProvider,
@@ -981,10 +1002,11 @@ export function useWalletSync(
   const resetDesignate = useCallback(() => setDesignateTxStatus({stage: 'idle'}), []);
 
   const designate = useCallback(async (receiverAddress?: string): Promise<void> => {
-    const f  = facadeRef.current;
-    const ks = keystoreRef.current;
-    const sk = shieldedKeysRef.current;
-    const dk = dustKeyRef.current;
+    const f   = facadeRef.current;
+    const ks  = keystoreRef.current;
+    const sk  = shieldedKeysRef.current;
+    const dk  = dustKeyRef.current;
+    const net = networkRef.current;
     if (!f || !ks || !sk || !dk) {
       logger.warn('Designate: wallet not connected');
       setDesignateTxStatus({stage: 'failed', error: 'Wallet not connected'});
@@ -1010,11 +1032,20 @@ export function useWalletSync(
         return;
       }
 
-      // registerNightUtxosForDustGeneration takes the UTXOs, unshielded public key,
-      // an inline signing function, and an optional receiver address for DUST.
-      // When no address is supplied the SDK defaults to the dust wallet's own address,
-      // which is the correct behaviour — so just pass through what the caller provided.
-      const dustReceiver = receiverAddress ?? undefined;
+      // registerNightUtxosForDustGeneration expects a DustAddress object (not a raw
+      // Bech32m string) as the 4th argument.  Parse the caller-supplied string, or
+      // pass undefined to let the SDK default to the dust wallet's own address.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let dustReceiver: any;
+      if (receiverAddress) {
+        try {
+          dustReceiver = MidnightBech32m.parse(receiverAddress).decode(DustAddress, net.name);
+        } catch (parseErr) {
+          logger.warn('Designate: invalid dust receiver address — defaulting to own address', parseErr);
+          dustReceiver = undefined;
+        }
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const recipe = await (f as any).registerNightUtxosForDustGeneration(
         utxos,
@@ -1023,6 +1054,10 @@ export function useWalletSync(
         dustReceiver,
       );
 
+      // Registration is self-contained: the fee is covered by future DUST accrual
+      // and registerNightUtxosForDustGeneration returns an already-proven recipe.
+      // Do NOT call balanceUnprovenTransaction — it would try to add a redundant fee
+      // proof, causing the proving server to hang.  Pass the recipe directly.
       setDesignateTxStatus({stage: 'submitting'});
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const finalized = await (f as any).finalizeRecipe(recipe);

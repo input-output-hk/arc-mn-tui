@@ -32,7 +32,16 @@ class Logger {
   private write(level: LogLevel, msg: string, cause?: unknown) {
     const entry: LogEntry = {ts: new Date().toISOString(), level, msg};
     if (cause != null) {
-      entry.cause = cause instanceof Error ? cause.message : String(cause);
+      // Unwrap nested `.cause` chains (e.g. SubmissionError wraps a Polkadot error).
+      let root: unknown = cause;
+      const chain: string[] = [];
+      while (root != null) {
+        chain.push(root instanceof Error ? root.message : String(root));
+        const next = (root as any)?.cause;
+        if (next == null || next === root) break;
+        root = next;
+      }
+      entry.cause = chain.join(' → ');
       if (cause instanceof Error && cause.stack) entry.stack = cause.stack;
     }
     try {

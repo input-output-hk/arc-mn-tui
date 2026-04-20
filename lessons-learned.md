@@ -5,7 +5,7 @@ solutions. Recorded here so they don't need to be rediscovered.
 
 ---
 
-## 1. `ledger-v7` 7.0.0/7.0.1 — `ZswapChainState::tryApply` panic
+## 1. `ledger-v7` 7.0.0/7.0.1 — `ZswapChainState::tryApply` panic ✅ RESOLVED
 
 **Problem:** `@midnight-ntwrk/ledger-v7` 7.0.0 and 7.0.1 contain a bug in the
 Rust WASM layer where `MerkleTree::collapse` panics on any non-empty tree when
@@ -14,32 +14,12 @@ transfers, or contract deployment). This manifests as an uncaught exception thro
 from deep inside the WASM bundle with no useful stack trace.
 
 **Impact:** Shielded minting and any transaction that creates a shielded output
-will crash unless the workaround is in place. There is no way to mint unshielded
-tokens via the built-in fungible-token contract because the contract always mints
-to a ZSwap (shielded) address — so unshielded minting is not supported by the
-contract design, not just by this bug. The bug primarily blocked shielded minting
-and deployment transactions.
+will crash unless the workaround is in place.
 
-**Workaround (in `src/hooks/useWalletSync.ts`):**
-
-```typescript
-const _origTryApply = ledger.ZswapChainState.prototype.tryApply;
-ledger.ZswapChainState.prototype.tryApply = function (...args: unknown[]) {
-  try {
-    return _origTryApply.apply(this, args as any);
-  } catch {
-    return [this, new Map()];
-  }
-};
-```
-
-Returning `[this, new Map()]` on error means the failed application is treated as
-a no-op; the wallet continues syncing but the offending operation is silently
-skipped. This is not semantically correct in general but is safe for the TUI use
-case where the wallet is read-only with respect to this path.
-
-**Status:** Fix expected in `ledger-v7` 7.0.2+. When upgrading, verify that the
-monkey-patch can be removed by confirming shielded minting works without it.
+**Status:** Fixed in `ledger-v7` 7.0.2+ and not present in `ledger-v8`. The
+project was upgraded to `ledger-v8 ^8.0.3` (via `wallet-sdk-facade ^3.0.0`).
+The monkey-patch was removed from both `src/hooks/useWalletSync.ts` and
+`src/night-tps.ts` on 2026-04-20.
 
 **Reference:** https://github.com/geofflittle/tryapply-crash-repro
 
@@ -64,6 +44,40 @@ handled.
 **Note:** This is fragile because it depends on internal ledger serialization
 details (`Intent.deserialize`, `addSignatures`). If the ledger format changes in
 a future SDK version, this code will need to be updated.
+
+---
+
+## 13. `registerNightUtxosForDustGeneration`: do not call `balanceUnprovenTransaction`
+
+**Problem:** Two separate bugs caused DUST registration ("Designate") to fail:
+
+1. **Raw string for dust receiver**: The 4th argument to
+   `registerNightUtxosForDustGeneration` must be a `DustAddress` object (or
+   `undefined`), not a raw Bech32m string.  Passing a string caused the SDK to embed
+   invalid bytes in the transaction, which the node rejected.  Fix: parse via
+   `MidnightBech32m.parse(addr).decode(DustAddress, networkName)`.
+
+2. **`balanceUnprovenTransaction` hangs**: Unlike deregistration (which sets
+   `allowFeePayment=0n` and needs an explicit fee-balancing step),
+   `registerNightUtxosForDustGeneration` returns an **already-proven** recipe
+   (`{type, transaction}`) — the fee is covered by future DUST accrual.  Calling
+   `balanceUnprovenTransaction` on it causes the proving server to hang indefinitely.
+   Fix: pass `recipe` (not `recipe.transaction`) directly to `finalizeRecipe`.
+
+**Correct registration flow:**
+```typescript
+const recipe  = await facade.registerNightUtxosForDustGeneration(utxos, pubKey, signFn, dustReceiverObj);
+const finalized = await facade.finalizeRecipe(recipe);
+const txHash  = await facade.submitTransaction(finalized);
+```
+
+**Correct deregistration flow (needs balance step):**
+```typescript
+const recipe         = await facade.deregisterFromDustGeneration(utxos, pubKey, signFn);
+const balancedRecipe = await facade.balanceUnprovenTransaction(recipe.transaction, keys, opts);
+const finalized      = await facade.finalizeRecipe(balancedRecipe);
+const txHash         = await facade.submitTransaction(finalized);
+```
 
 ---
 
@@ -107,19 +121,29 @@ absence of any SDK API for cross-registration detection.
 
 ---
 
-## 5. `UnshieldedWallet` has a different constructor from `ShieldedWallet`/`DustWallet`
+## 5. Wallet constructor configs differ; `DustWallet` type export omits `indexerClientConnection`
 
-**Problem:** All three wallet types look similar on the surface but `UnshieldedWallet`
-requires a distinct config object and key-import API:
+**Problem:** All three wallet types look similar on the surface but each requires a
+distinct config object and key-import API:
 
-- `ShieldedWallet(cfg)` and `DustWallet(cfg)` accept `provingServerUrl` and
-  `relayURL` in their config; `UnshieldedWallet` does not.
+- `ShieldedWallet(cfg)` accepts `{networkId, indexerClientConnection, provingServerUrl, relayURL}`.
+- `UnshieldedWallet(cfg)` accepts `{networkId, indexerClientConnection, txHistoryStorage}`;
+  does NOT accept `provingServerUrl` / `relayURL`.
+- `DustWallet(cfg)` accepts `{networkId, costParameters, indexerClientConnection}`.
+
+**DustWallet type trap:** The exported `DefaultDustConfiguration` type is
+`{networkId, costParameters}` only — `indexerClientConnection` is absent from the type
+but is accessed at runtime by the wallet's sync service (`Sync.js:98`). Omitting it
+causes `TypeError: Cannot read properties of undefined (reading 'indexerHttpUrl')` on
+the first sync attempt. Always pass `indexerClientConnection` even though TypeScript
+will not warn you.
+
+Additional differences:
 - `UnshieldedWallet` requires an explicit `txHistoryStorage` (we use
   `InMemoryTransactionHistoryStorage`, so history is lost on restart).
 - Keys are imported via `startWithPublicKey(PublicKey.fromKeyStore(keystore))`
   rather than `startWithSecretKeys(…)`.
-- The restore path is `UnshieldedWallet({...reducedCfg}).restore(saved)` with the
-  same reduced config (no `provingServerUrl` / `relayURL`).
+- The restore path for each wallet uses the same reduced config as the factory call.
 
 Mixing up the configs causes silent failures or cryptic TypeScript errors.
 
@@ -247,3 +271,41 @@ The wallet's unshielded Bech32 address satisfies both: it is deterministic, alwa
 ≥ 16 characters, and wallet-specific. Call `.toString()` explicitly —
 `getBech32Address()` returns an address object, not a plain string, and the SDK
 calls `.trim()` on these values which will throw if they are not primitives.
+
+---
+
+## 12. Compact compiler / `compact-js` runtime version pairing
+
+**Problem:** `compact-js` runtime and the Compact compiler binary are versioned
+independently. The compiled `.js` output contains a `checkRuntimeVersion('x.y.z')`
+call that must match the `@midnight-ntwrk/compact-runtime` version bundled inside
+the installed `compact-js` package. A mismatch produces:
+
+```
+Version mismatch: compiled code expects 0.14.0, runtime is 0.15.0
+```
+
+**The `compact` CLI is a version manager**, not the compiler itself. Use
+`compact list` to see available inner compiler versions and `compact update <ver>`
+to switch. The installed toolchain manager (`~/.local/bin/compact`) stays at its
+own version (e.g. 0.4.0) independently of the inner compiler.
+
+**Pairing table (as of 2026-04-20):**
+
+| Inner compiler | Compact language | `compact-runtime` | `compact-js` |
+|---|---|---|---|
+| 0.29.0 | 0.21 | 0.14.0 | 2.4.x |
+| 0.30.0 | 0.22 | 0.15.0 | 2.5.0 |
+
+**Breaking changes in language 0.22 (compiler 0.30.0):**
+- `NativePoint` renamed to `JubjubPoint`
+- `JubjubPoint` is now an opaque type — `.x`/`.y` field access removed; compare
+  points directly with `==`
+- `send` added to `CompactStandardLibrary`; contracts that export `circuit send`
+  must rename that circuit
+- Exact `pragma language_version 0.21;` rejected; use `>= 0.21` or `>= 0.22`
+
+**Always `cd` into the project directory before running `compact compile`.**
+Relative paths like `contracts/managed/fungible-token` resolve against cwd; running
+from the repo root silently writes output to the wrong location (or creates a
+spurious directory) and overwrites existing managed artifacts.

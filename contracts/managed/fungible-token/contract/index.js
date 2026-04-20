@@ -1,5 +1,5 @@
 import * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
-__compactRuntime.checkRuntimeVersion('0.14.0');
+__compactRuntime.checkRuntimeVersion('0.15.0');
 
 const _descriptor_0 = new __compactRuntime.CompactTypeUnsignedInteger(18446744073709551615n, 8);
 
@@ -182,6 +182,7 @@ export class Contract {
       }
     };
     this.impureCircuits = { mint: this.circuits.mint };
+    this.provableCircuits = { mint: this.circuits.mint };
   }
   initialState(...args_0) {
     if (args_0.length !== 1) {

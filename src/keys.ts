@@ -1,7 +1,7 @@
 import * as bip39                                     from 'bip39';
 import { Buffer }                                      from 'buffer';
 import { HDWallet, Roles }                             from '@midnight-ntwrk/wallet-sdk-hd';
-import { ZswapSecretKeys, DustSecretKey }              from '@midnight-ntwrk/ledger-v7';
+import { ZswapSecretKeys, DustSecretKey }              from '@midnight-ntwrk/ledger-v8';
 import {
   ShieldedAddress,
   ShieldedCoinPublicKey,
