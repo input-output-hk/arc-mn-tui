@@ -32,7 +32,7 @@ import { Buffer }                                        from 'buffer';
 import * as fs                                           from 'node:fs/promises';
 import * as Rx                                           from 'rxjs';
 import * as bip39                                        from 'bip39';
-import * as ledger                                       from '@midnight-ntwrk/ledger-v7';
+import * as ledger                                       from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade }                                  from '@midnight-ntwrk/wallet-sdk-facade';
 import { DustWallet }                                    from '@midnight-ntwrk/wallet-sdk-dust-wallet';
 import { ShieldedWallet }                                from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -43,32 +43,12 @@ import {
   UnshieldedWallet,
 }                                                        from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { HDWallet, Roles }                               from '@midnight-ntwrk/wallet-sdk-hd';
+import { MidnightBech32m, UnshieldedAddress }            from '@midnight-ntwrk/wallet-sdk-address-format';
 import { setNetworkId }                                  from '@midnight-ntwrk/midnight-js-network-id';
 import { WebSocket }                                     from 'ws';
 
 // Must register WebSocket globally before any SDK code runs.
 (globalThis as any).WebSocket = WebSocket;
-
-// ---------------------------------------------------------------------------
-// Workaround: ledger-v7 7.0.0/7.0.1 ZswapChainState::tryApply panic
-//
-// MerkleTree::collapse panics on any non-empty tree when producing shielded
-// outputs (shielded transfers, DUST registration, shielded minting, contract
-// deployment). Without this patch the WASM panic corrupts the proof state,
-// resulting in a BalanceCheckOverspend (error 138) from the node.
-// Returning [this, new Map()] makes the local state update a no-op and lets
-// proof generation proceed correctly.
-// See: https://github.com/geofflittle/tryapply-crash-repro
-// Fix expected in ledger-v7 7.0.2+; remove when upgrading.
-// ---------------------------------------------------------------------------
-const _origTryApply = (ledger as any).ZswapChainState.prototype.tryApply;
-(ledger as any).ZswapChainState.prototype.tryApply = function (...args: unknown[]) {
-  try {
-    return _origTryApply.apply(this, args as any);
-  } catch {
-    return [this, new Map()];
-  }
-};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -111,6 +91,7 @@ interface WalletCtx {
   shieldedSecretKeys: ledger.ZswapSecretKeys;
   dustSecretKey:      ledger.DustSecretKey;
   keystore:           ReturnType<typeof createKeystore>;
+  network:            string;
 }
 
 interface WalletRecord {
@@ -207,21 +188,31 @@ async function initWallet(seed: Buffer, cfg: NetConfig): Promise<WalletCtx> {
     relayURL,
   };
 
-  const shielded   = ShieldedWallet(walletCfg).startWithSecretKeys(shieldedSecretKeys);
-  const unshielded = UnshieldedWallet({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const shielded   = (ShieldedWallet as any)(walletCfg).startWithSecretKeys(shieldedSecretKeys);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const unshielded = (UnshieldedWallet as any)({
     networkId:               cfg.network,
     indexerClientConnection: { indexerHttpUrl, indexerWsUrl },
     txHistoryStorage:        new InMemoryTransactionHistoryStorage(),
   }).startWithPublicKey(PublicKey.fromKeyStore(keystore));
-  const dust = DustWallet({
-    ...walletCfg,
-    costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dust = (DustWallet as any)({
+    networkId:               cfg.network,
+    costParameters:          { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 },
+    indexerClientConnection: { indexerHttpUrl, indexerWsUrl },
   }).startWithSecretKey(dustSecretKey, ledger.LedgerParameters.initialParameters().dust);
 
-  const facade = new WalletFacade(shielded, unshielded, dust);
-  await facade.start(shieldedSecretKeys, dustSecretKey);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const facade = await (WalletFacade as any).init({
+    configuration: { ...walletCfg, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } } as any,
+    shielded:   () => shielded,
+    unshielded: () => unshielded,
+    dust:       () => dust,
+  });
+  await (facade as any).start(shieldedSecretKeys, dustSecretKey);
 
-  return { facade, shieldedSecretKeys, dustSecretKey, keystore };
+  return { facade, shieldedSecretKeys, dustSecretKey, keystore, network: cfg.network };
 }
 
 function walletAddress(ctx: WalletCtx): string {
@@ -263,7 +254,7 @@ async function waitForDust(ctx: WalletCtx): Promise<void> {
       Rx.tap(() => process.stdout.write('.')),
       Rx.filter((s: any) =>
         s.isSynced === true &&
-        (s.dust?.walletBalance?.(new Date()) ?? 0n) > 0n,
+        (s.dust?.balance?.(new Date()) ?? 0n) > 0n,
       ),
     ),
   );
@@ -271,14 +262,14 @@ async function waitForDust(ctx: WalletCtx): Promise<void> {
 }
 
 async function getNightBalance(ctx: WalletCtx): Promise<bigint> {
-  const s = await Rx.firstValueFrom((ctx.facade as any).state());
+  const s: any = await Rx.firstValueFrom((ctx.facade as any).state());
   return (s.unshielded?.balances?.[NIGHT_ID] ?? 0n) +
          (s.shielded?.balances?.[NIGHT_ID]   ?? 0n);
 }
 
 async function getDustBalance(ctx: WalletCtx): Promise<bigint> {
-  const s = await Rx.firstValueFrom((ctx.facade as any).state());
-  return s.dust?.walletBalance?.(new Date()) ?? 0n;
+  const s: any = await Rx.firstValueFrom((ctx.facade as any).state());
+  return s.dust?.balance?.(new Date()) ?? 0n;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +277,7 @@ async function getDustBalance(ctx: WalletCtx): Promise<bigint> {
 // ---------------------------------------------------------------------------
 
 async function registerForDust(ctx: WalletCtx): Promise<string | null> {
-  const state = await Rx.firstValueFrom(
+  const state: any = await Rx.firstValueFrom(
     (ctx.facade as any).state().pipe(
       Rx.filter((s: any) => s.isSynced === true),
     ),
@@ -309,6 +300,9 @@ async function registerForDust(ctx: WalletCtx): Promise<string | null> {
     ctx.keystore.getPublicKey(),
     (payload: Uint8Array) => ctx.keystore.signData(payload),
   );
+  // Registration is self-contained (fee covered by future DUST); the SDK returns an
+  // already-proven recipe.  Skip balanceUnprovenTransaction — it would hang the
+  // proving server.  Pass the recipe directly to finalizeRecipe.
   const finalized = await (ctx.facade as any).finalizeRecipe(recipe);
   const txHash    = await (ctx.facade as any).submitTransaction(finalized) as string;
   console.log(`  DUST registration tx: ${txHash}`);
@@ -324,7 +318,7 @@ async function transferNight(
   const recipe = await (ctx.facade as any).transferTransaction(
     [{
       type:    'unshielded',
-      outputs: [{ type: NIGHT_ID, amount, receiverAddress: toAddr }],
+      outputs: [{ type: NIGHT_ID, amount, receiverAddress: MidnightBech32m.parse(toAddr).decode(UnshieldedAddress, ctx.network) }],
     }],
     { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey: ctx.dustSecretKey },
     { ttl },
