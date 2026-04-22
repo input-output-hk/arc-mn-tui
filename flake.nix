@@ -95,15 +95,6 @@
             # Local npm prefix to avoid sudo
             export NPM_CONFIG_PREFIX="$PWD/.npm-global"
             export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-
-            # Check if gemini-cli is installed
-            if ! command -v gemini &> /dev/null; then
-              echo "Installing Gemini CLI into local prefix..."
-              npm install -g @google/gemini-cli
-            fi
-
-            echo "🚀 Sandboxed Environment Active"
-            echo "Use './gemini-sandbox.sh' to run Gemini with restricted filesystem access."
           '';
         };
       }
