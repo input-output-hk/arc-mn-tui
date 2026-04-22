@@ -227,36 +227,60 @@ async function closeWallet(ctx: WalletCtx): Promise<void> {
 // Wallet state observers
 // ---------------------------------------------------------------------------
 
+/**
+ * Subscribe to the wallet state observable until `pred` is satisfied.
+ * Retries on observable errors (e.g. transient Wallet.Sync errors emitted by
+ * the new SDK) instead of propagating them, capped at `maxRetries` attempts.
+ */
+async function waitForCondition(
+  ctx:         WalletCtx,
+  pred:        (s: any) => boolean,
+  label:       string,
+  maxRetries = 20,
+  retryMs    = 2_000,
+): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await Rx.firstValueFrom(
+        (ctx.facade as any).state().pipe(
+          Rx.filter(pred),
+        ),
+      );
+      return;
+    } catch (e: unknown) {
+      if (attempt >= maxRetries) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      process.stderr.write(`  [${label}] transient error (attempt ${attempt + 1}/${maxRetries}): ${msg}\n`);
+      await new Promise<void>(r => setTimeout(r, retryMs));
+    }
+  }
+}
+
 async function waitForSync(ctx: WalletCtx): Promise<void> {
-  await Rx.firstValueFrom(
-    (ctx.facade as any).state().pipe(
-      Rx.filter((s: any) => s.isSynced === true),
-    ),
-  );
+  await waitForCondition(ctx, (s: any) => s.isSynced === true, 'sync');
 }
 
 async function waitForFunds(ctx: WalletCtx): Promise<void> {
-  await Rx.firstValueFrom(
-    (ctx.facade as any).state().pipe(
-      Rx.filter((s: any) =>
-        s.isSynced === true &&
-        ((s.unshielded?.balances?.[NIGHT_ID] ?? 0n) +
-         (s.shielded?.balances?.[NIGHT_ID]   ?? 0n)) > 0n,
-      ),
-    ),
+  await waitForCondition(
+    ctx,
+    (s: any) =>
+      s.isSynced === true &&
+      ((s.unshielded?.balances?.[NIGHT_ID] ?? 0n) +
+       (s.shielded?.balances?.[NIGHT_ID]   ?? 0n)) > 0n,
+    'funds',
   );
 }
 
 async function waitForDust(ctx: WalletCtx): Promise<void> {
   process.stdout.write('  Waiting for DUST to accrue');
-  await Rx.firstValueFrom(
-    (ctx.facade as any).state().pipe(
-      Rx.tap(() => process.stdout.write('.')),
-      Rx.filter((s: any) =>
-        s.isSynced === true &&
-        (s.dust?.balance?.(new Date()) ?? 0n) > 0n,
-      ),
-    ),
+  await waitForCondition(
+    ctx,
+    (s: any) => {
+      process.stdout.write('.');
+      return s.isSynced === true &&
+        (s.dust?.balance?.(new Date()) ?? 0n) > 0n;
+    },
+    'dust',
   );
   process.stdout.write('\n');
 }
