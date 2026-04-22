@@ -50,6 +50,20 @@ import { WebSocket }                                     from 'ws';
 // Must register WebSocket globally before any SDK code runs.
 (globalThis as any).WebSocket = WebSocket;
 
+// Suppress RPC-CORE connection/disconnection noise from the Polkadot.js logger.
+// The SDK's internal logger creates bound console.error references at module
+// import time (before any of our module-level code runs), so patching
+// console.error/console.warn after-the-fact is too late.  Intercepting
+// process.stderr.write works because console.* ultimately calls it dynamically.
+{
+  const _origWrite = process.stderr.write.bind(process.stderr) as typeof process.stderr.write;
+  process.stderr.write = ((chunk: Uint8Array | string, ...rest: unknown[]) => {
+    const s = typeof chunk === 'string' ? chunk : chunk.toString();
+    if (s.includes('RPC-CORE') || s.includes('RPC/CORE')) return true;
+    return (_origWrite as any)(chunk, ...rest);
+  }) as typeof process.stderr.write;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -59,6 +73,19 @@ const NIGHT_ID = '0'.repeat(64);
 
 /** Fixed seed for the genesis mint wallet on a local dev node. */
 const GENESIS_SEED = '0000000000000000000000000000000000000000000000000000000000000001';
+
+/** NIGHT amount sent in each run-phase transfer (1 NIGHT). */
+const SEND_AMT = 1_000_000n;
+
+/**
+ * Minimum DUST balance required before attempting the next sequential
+ * transaction in a wallet.  After each tx the DUST-generating NIGHT UTXOs are
+ * consumed and re-registered, so the balance returns to 0 at confirmation and
+ * then accrues from scratch.  Set to 500 trillion (≈ 1.67× additionalFeeOverhead)
+ * to give a comfortable margin; with 1000 NIGHT registered, this level
+ * re-accrues in roughly 75–90 s after confirmation.
+ */
+const MIN_DUST_PER_TX = 500_000_000_000_000n;
 
 /** Network endpoint presets. */
 const NETWORK_DEFAULTS: Record<string, { node: string; indexer: string; prover: string }> = {
@@ -285,6 +312,23 @@ async function waitForDust(ctx: WalletCtx): Promise<void> {
   process.stdout.write('\n');
 }
 
+/**
+ * Wait until the wallet is synced (tx confirmed, DUST generators re-registered)
+ * and enough DUST has accrued for the next transaction.
+ * Call this between consecutive transactions on the same wallet.
+ */
+async function waitForNextTx(ctx: WalletCtx): Promise<void> {
+  await waitForCondition(
+    ctx,
+    (s: any) =>
+      s.isSynced === true &&
+      (s.dust?.balance?.(new Date()) ?? 0n) >= MIN_DUST_PER_TX,
+    'next-tx',
+    /* maxRetries */ 90,
+    /* retryMs   */ 2_000,
+  );
+}
+
 async function getNightBalance(ctx: WalletCtx): Promise<bigint> {
   const s: any = await Rx.firstValueFrom((ctx.facade as any).state());
   return (s.unshielded?.balances?.[NIGHT_ID] ?? 0n) +
@@ -355,18 +399,46 @@ async function transferNight(
   return (ctx.facade as any).submitTransaction(finalized) as Promise<string>;
 }
 
+/**
+ * Like `transferNight` but retries with exponential back-off on transient
+ * "could not balance dust" failures.  The wallet's DUST balance predicate can
+ * fire on a cached snapshot that is slightly out of date; the retry absorbs
+ * those rare misses without requiring a long up-front wait.
+ */
+async function transferNightWithRetry(
+  ctx:    WalletCtx,
+  toAddr: string,
+  amount: bigint,
+  label:  string,
+): Promise<string> {
+  const DUST_ERR = 'could not balance dust';
+  let delayMs = 15_000;
+  for (;;) {
+    try {
+      return await transferNight(ctx, toAddr, amount);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.toLowerCase().includes(DUST_ERR)) throw e;
+      process.stderr.write(`  [${label}] dust error — retrying in ${delayMs / 1000}s\n`);
+      await new Promise<void>(r => setTimeout(r, delayMs));
+      delayMs = Math.min(delayMs * 2, 120_000);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // setup command
 // ---------------------------------------------------------------------------
 
 async function cmdSetup(opts: {
-  nWallets:  number;
-  night:     bigint;
-  storePath: string;
-  cfg:       NetConfig;
+  nWallets:     number;
+  txsPerWallet: number;
+  night:        bigint;
+  storePath:    string;
+  cfg:          NetConfig;
 }): Promise<void> {
-  const { nWallets, night, storePath, cfg } = opts;
-  console.log(`\n=== setup: funding ${nWallets} wallet(s) × ${fmtNight(night)} NIGHT on ${cfg.network} ===\n`);
+  const { nWallets, txsPerWallet, night, storePath, cfg } = opts;
+  console.log(`\n=== setup: funding ${nWallets} wallet(s) × (${fmtNight(night)} NIGHT DUST + ${txsPerWallet} × ${fmtNight(SEND_AMT)} NIGHT run) on ${cfg.network} ===\n`);
 
   // 1. Genesis wallet --------------------------------------------------------
   console.log('Initialising genesis wallet (seed 00…01)…');
@@ -403,13 +475,27 @@ async function cmdSetup(opts: {
     console.log(`  ${name}: ${address}`);
   }
 
-  // 3. Transfer NIGHT from genesis to each wallet (sequential — genesis
-  //    UTXOs must be spent one at a time unless the node supports tx chaining)
+  // 3. Transfer NIGHT from genesis to each wallet.
+  //    Two kinds of UTXO are created per wallet:
+  //      • One large UTXO (--night, default 1000 NIGHT) for DUST accrual — not
+  //        spent during the run, so DUST continues to accumulate between runs.
+  //      • txsPerWallet × SEND_AMT (1 NIGHT each) as individual run UTXOs —
+  //        one confirmed UTXO per planned run transaction so each tx can spend
+  //        a different pre-confirmed coin and avoid the "pending change" problem.
+  //    The genesis wallet SDK tracks its own pending change, so all of these
+  //    can be submitted without waiting for confirmation between transfers.
   console.log('\nFunding test wallets from genesis…');
   for (const w of records) {
-    console.log(`  Sending ${fmtNight(night)} → ${w.name}…`);
+    console.log(`  ${w.name}: sending ${fmtNight(night)} NIGHT (DUST UTXO)…`);
     const txHash = await transferNight(genesisCtx, w.address, night);
     console.log(`  tx: ${txHash}`);
+  }
+  console.log(`\n  Creating ${txsPerWallet} run UTXO(s) of ${fmtNight(SEND_AMT)} NIGHT per wallet…`);
+  for (const w of records) {
+    for (let t = 0; t < txsPerWallet; t++) {
+      const txHash = await transferNight(genesisCtx, w.address, SEND_AMT);
+      console.log(`  ${w.name} run UTXO ${t + 1}/${txsPerWallet}: ${txHash}`);
+    }
   }
   await closeWallet(genesisCtx);
 
@@ -469,7 +555,6 @@ async function cmdRun(opts: {
 
   const nWallets  = store.wallets.length;
   const totalTxs  = nWallets * txsPerWallet;
-  const sendAmt   = 1_000_000n; // 1 NIGHT per transfer
 
   console.log(`\n=== run: ${nWallets} wallet(s) × ${txsPerWallet} tx(s) = ${totalTxs} transfers on ${cfg.network} ===\n`);
 
@@ -505,8 +590,12 @@ async function cmdRun(opts: {
       const toAddr = walletAddress(ctxs[(i + 1) % nWallets]);
       const name   = store.wallets[i].name;
       for (let t = 0; t < txsPerWallet; t++) {
+        if (t > 0) {
+          await waitForNextTx(ctx);
+          console.log(`  ${name} tx ${t}/${txsPerWallet} confirmed`);
+        }
         const t0     = Date.now();
-        const txHash = await transferNight(ctx, toAddr, sendAmt);
+        const txHash = await transferNightWithRetry(ctx, toAddr, SEND_AMT, name);
         const ms     = Date.now() - t0;
         results.push({ wallet: name, seq: t + 1, txHash, ms });
         console.log(`  ${name} tx ${t + 1}/${txsPerWallet}  ${txHash}  (${ms} ms)`);
@@ -567,11 +656,12 @@ Options (both commands):
   --prover   URL    Proof server URL
 
 Options (setup only):
-  --wallets  N      Number of test wallets         (default: 3)
-  --night    N      NIGHT per wallet (whole units)  (default: 1000)
+  --wallets  N      Number of test wallets          (default: 3)
+  --night    N      NIGHT for DUST UTXO (whole units)(default: 1000)
 
-Options (run only):
-  --txs      N      Transactions per wallet         (default: 5)
+Options (setup and run):
+  --txs      N      Transactions per wallet          (default: 5)
+                    setup creates N pre-funded 1-NIGHT UTXOs per wallet
 
 Examples:
   npx tsx src/night-tps.ts setup --wallets 5 --night 500
@@ -599,10 +689,11 @@ Examples:
 
   switch (command) {
     case 'setup': {
-      const nWallets = parseInt(flag(rest, 'wallets', '3'));
-      const nightN   = parseFloat(flag(rest, 'night', '1000'));
-      const night    = BigInt(Math.floor(nightN * 1_000_000));
-      await cmdSetup({ nWallets, night, storePath, cfg });
+      const nWallets     = parseInt(flag(rest, 'wallets', '3'));
+      const txsPerWallet = parseInt(flag(rest, 'txs', '5'));
+      const nightN       = parseFloat(flag(rest, 'night', '1000'));
+      const night        = BigInt(Math.floor(nightN * 1_000_000));
+      await cmdSetup({ nWallets, txsPerWallet, night, storePath, cfg });
       break;
     }
     case 'run': {
