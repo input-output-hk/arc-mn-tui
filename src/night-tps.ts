@@ -382,11 +382,27 @@ async function transferNight(
   toAddr: string,
   amount: bigint,
 ): Promise<string> {
+  return transferNightBatch(ctx, [{ address: toAddr, amount }]);
+}
+
+/**
+ * Send NIGHT to multiple recipients in a single transaction.
+ * All outputs are proved together (one proof server call), so this is far
+ * cheaper than N individual transfers when funding many wallets from genesis.
+ */
+async function transferNightBatch(
+  ctx:     WalletCtx,
+  outputs: { address: string; amount: bigint }[],
+): Promise<string> {
   const ttl    = new Date(Date.now() + 30 * 60 * 1000);
   const recipe = await (ctx.facade as any).transferTransaction(
     [{
       type:    'unshielded',
-      outputs: [{ type: NIGHT_ID, amount, receiverAddress: MidnightBech32m.parse(toAddr).decode(UnshieldedAddress, ctx.network) }],
+      outputs: outputs.map(o => ({
+        type:            NIGHT_ID,
+        amount:          o.amount,
+        receiverAddress: MidnightBech32m.parse(o.address).decode(UnshieldedAddress, ctx.network),
+      })),
     }],
     { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey: ctx.dustSecretKey },
     { ttl },
@@ -434,10 +450,11 @@ async function cmdSetup(opts: {
   nWallets:     number;
   txsPerWallet: number;
   night:        bigint;
+  batchSize:    number;
   storePath:    string;
   cfg:          NetConfig;
 }): Promise<void> {
-  const { nWallets, txsPerWallet, night, storePath, cfg } = opts;
+  const { nWallets, txsPerWallet, night, batchSize, storePath, cfg } = opts;
   console.log(`\n=== setup: funding ${nWallets} wallet(s) × (${fmtNight(night)} NIGHT DUST + ${txsPerWallet} × ${fmtNight(SEND_AMT)} NIGHT run) on ${cfg.network} ===\n`);
 
   // 1. Genesis wallet --------------------------------------------------------
@@ -475,27 +492,30 @@ async function cmdSetup(opts: {
     console.log(`  ${name}: ${address}`);
   }
 
-  // 3. Transfer NIGHT from genesis to each wallet.
-  //    Two kinds of UTXO are created per wallet:
-  //      • One large UTXO (--night, default 1000 NIGHT) for DUST accrual — not
-  //        spent during the run, so DUST continues to accumulate between runs.
-  //      • txsPerWallet × SEND_AMT (1 NIGHT each) as individual run UTXOs —
-  //        one confirmed UTXO per planned run transaction so each tx can spend
-  //        a different pre-confirmed coin and avoid the "pending change" problem.
-  //    The genesis wallet SDK tracks its own pending change, so all of these
-  //    can be submitted without waiting for confirmation between transfers.
-  console.log('\nFunding test wallets from genesis…');
+  // 3. Transfer NIGHT from genesis to each wallet in batches.
+  //    Each wallet receives two kinds of UTXO:
+  //      • One large UTXO (--night, default 1000 NIGHT) for DUST accrual.
+  //      • txsPerWallet × SEND_AMT (1 NIGHT each) as individual run UTXOs.
+  //    All outputs are packed into transactions of at most --batch outputs each,
+  //    so a large wallet count requires only a handful of genesis transactions
+  //    (and proof server calls) instead of one per wallet.
+  const allOutputs: { address: string; amount: bigint; label: string }[] = [];
   for (const w of records) {
-    console.log(`  ${w.name}: sending ${fmtNight(night)} NIGHT (DUST UTXO)…`);
-    const txHash = await transferNight(genesisCtx, w.address, night);
-    console.log(`  tx: ${txHash}`);
-  }
-  console.log(`\n  Creating ${txsPerWallet} run UTXO(s) of ${fmtNight(SEND_AMT)} NIGHT per wallet…`);
-  for (const w of records) {
+    allOutputs.push({ address: w.address, amount: night,    label: `${w.name} DUST UTXO` });
     for (let t = 0; t < txsPerWallet; t++) {
-      const txHash = await transferNight(genesisCtx, w.address, SEND_AMT);
-      console.log(`  ${w.name} run UTXO ${t + 1}/${txsPerWallet}: ${txHash}`);
+      allOutputs.push({ address: w.address, amount: SEND_AMT, label: `${w.name} run UTXO ${t + 1}/${txsPerWallet}` });
     }
+  }
+
+  const totalOutputs = allOutputs.length;
+  const nBatches     = Math.ceil(totalOutputs / batchSize);
+  console.log(`\nFunding test wallets from genesis (${totalOutputs} outputs, ${nBatches} batch(es) of ≤${batchSize})…`);
+
+  for (let b = 0; b < nBatches; b++) {
+    const batch = allOutputs.slice(b * batchSize, (b + 1) * batchSize);
+    console.log(`  Batch ${b + 1}/${nBatches}: ${batch.map(o => o.label).join(', ')}`);
+    const txHash = await transferNightBatch(genesisCtx, batch);
+    console.log(`  tx: ${txHash}`);
   }
   await closeWallet(genesisCtx);
 
@@ -504,27 +524,25 @@ async function cmdSetup(opts: {
   await fs.writeFile(storePath, JSON.stringify(store, null, 2));
   console.log(`\nWallet store saved to ${storePath}`);
 
-  // 5. Register each wallet for DUST ----------------------------------------
+  // 5. Register each wallet for DUST (all wallets in parallel) ---------------
   console.log('\nRegistering test wallets for DUST…');
-  for (const w of records) {
-    console.log(`\n${w.name} (${w.address})`);
+  await Promise.all(records.map(async (w) => {
     const seed = await mnemonicToSeed(w.mnemonic);
     const ctx  = await initWallet(seed, cfg);
 
-    console.log('  Waiting for sync + funds…');
     await waitForSync(ctx);
     await waitForFunds(ctx);
 
     const bal = await getNightBalance(ctx);
-    console.log(`  NIGHT balance : ${fmtNight(bal)}`);
+    console.log(`  ${w.name}: NIGHT=${fmtNight(bal)}, registering for DUST…`);
 
     await registerForDust(ctx);
     await waitForDust(ctx);
 
     const dust = await getDustBalance(ctx);
-    console.log(`  DUST balance  : ${dust}`);
+    console.log(`  ${w.name}: DUST=${dust}`);
     await closeWallet(ctx);
-  }
+  }));
 
   console.log('\n=== setup complete — wallets are funded and ready for "run" ===');
 }
@@ -658,6 +676,7 @@ Options (both commands):
 Options (setup only):
   --wallets  N      Number of test wallets          (default: 3)
   --night    N      NIGHT for DUST UTXO (whole units)(default: 1000)
+  --batch    N      Max outputs per genesis tx       (default: 50)
 
 Options (setup and run):
   --txs      N      Transactions per wallet          (default: 5)
@@ -693,7 +712,8 @@ Examples:
       const txsPerWallet = parseInt(flag(rest, 'txs', '5'));
       const nightN       = parseFloat(flag(rest, 'night', '1000'));
       const night        = BigInt(Math.floor(nightN * 1_000_000));
-      await cmdSetup({ nWallets, txsPerWallet, night, storePath, cfg });
+      const batchSize    = parseInt(flag(rest, 'batch', '50'));
+      await cmdSetup({ nWallets, txsPerWallet, night, batchSize, storePath, cfg });
       break;
     }
     case 'run': {
