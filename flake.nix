@@ -19,10 +19,10 @@
         mn-tui = pkgs.buildNpmPackage {
           pname    = "mn-tui";
           version  = "0.1.0";
-          src      = ./experiments/mn-tui;
+          src      = ./.;
 
           # Recompute with: nix run nixpkgs#prefetch-npm-deps -- experiments/mn-tui/package-lock.json
-          npmDepsHash = "sha256-njYjBIRzA/6E7luQArKpswHVPmu1wHUUs0PK/bnNG6M=";
+          npmDepsHash = "sha256-Hq+TF0RmYE9aeqiIceI6hK2PfV/r1sqyOquhi4gjnP8=";
 
           # The lock file has an unresolvable smoldot peer-dep conflict inherited
           # from @substrate/connect (a transitive dep of the Midnight SDK).
@@ -74,21 +74,9 @@
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            altair
-            binaryen
-            bubblewrap
-          # calibre
-            cargo
             claude-code
             gh
-            mdbook
-            mdbook-epub
             nodejs_24
-            pandoc
-            python3
-            rustup
-            vscode
-            wabt
           ];
 
           shellHook = ''
