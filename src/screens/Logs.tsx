@@ -13,10 +13,11 @@ function entryColor(level: LogEntry['level']): string | undefined {
 }
 
 function formatEntry(e: LogEntry): string {
-  const time = e.ts ? e.ts.slice(11, 19) : '        ';
-  const lvl  = e.level ? e.level.padEnd(5) : 'INFO ';
-  const body = e.cause && e.cause !== e.msg ? `${e.msg}: ${e.cause}` : e.msg;
-  return `${time} [${lvl}] ${body}`;
+  const time   = e.ts ? e.ts.slice(11, 19) : '        ';
+  const lvl    = e.level ? e.level.padEnd(5) : 'INFO ';
+  const body   = e.cause && e.cause !== e.msg ? `${e.msg}: ${e.cause}` : e.msg;
+  const detail = e.detail ? ` | ${e.detail}` : '';
+  return `${time} [${lvl}] ${body}${detail}`;
 }
 
 export default function Logs() {
