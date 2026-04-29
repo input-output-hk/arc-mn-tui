@@ -9,12 +9,20 @@ export type ImpureCircuits<PS> = {
   mint(context: __compactRuntime.CircuitContext<PS>,
        amount_0: bigint,
        token_id_bytes_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
+  mint_unshielded(context: __compactRuntime.CircuitContext<PS>,
+                  amount_0: bigint,
+                  token_id_bytes_0: Uint8Array,
+                  recipient_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
 }
 
 export type ProvableCircuits<PS> = {
   mint(context: __compactRuntime.CircuitContext<PS>,
        amount_0: bigint,
        token_id_bytes_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
+  mint_unshielded(context: __compactRuntime.CircuitContext<PS>,
+                  amount_0: bigint,
+                  token_id_bytes_0: Uint8Array,
+                  recipient_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
 }
 
 export type PureCircuits = {
@@ -24,6 +32,10 @@ export type Circuits<PS> = {
   mint(context: __compactRuntime.CircuitContext<PS>,
        amount_0: bigint,
        token_id_bytes_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
+  mint_unshielded(context: __compactRuntime.CircuitContext<PS>,
+                  amount_0: bigint,
+                  token_id_bytes_0: Uint8Array,
+                  recipient_0: Uint8Array): __compactRuntime.CircuitResults<PS, []>;
 }
 
 export type Ledger = {

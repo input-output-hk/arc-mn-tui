@@ -85,14 +85,15 @@ export interface WalletState {
 // ---------------------------------------------------------------------------
 
 export interface NodeState {
-  blockHeight:  number;
-  blockHash:    string;
-  currentSlot:  number;
-  epochIndex:   number;
-  msUntilEpoch: number;   // milliseconds until the next epoch boundary
-  synced:       boolean;
-  peers:        number;
-  rpcUrl:       string;
+  blockHeight:   number;
+  blockHash:     string;
+  currentSlot:   number;
+  epochIndex:    number;
+  msUntilEpoch:  number;   // milliseconds until the next epoch boundary
+  synced:        boolean;
+  peers:         number;
+  rpcUrl:        string;
+  indexerHeight: number;   // latest block the indexer has processed; 0 = not yet known
 }
 
 // ---------------------------------------------------------------------------

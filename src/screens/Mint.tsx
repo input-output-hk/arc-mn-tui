@@ -5,7 +5,8 @@ import SelectInput                   from 'ink-select-input';
 import TxStatusComponent             from '../components/TxStatus.js';
 import type {WalletSyncState}        from '../hooks/useWalletSync.js';
 
-type Step = 'contract' | 'deploying' | 'amount' | 'confirm' | 'minting';
+type Step = 'type' | 'contract' | 'deploying' | 'amount' | 'confirm' | 'minting';
+type MintType = 'shielded' | 'unshielded';
 
 interface Props {
   onComplete:        () => void;
@@ -14,18 +15,19 @@ interface Props {
 }
 
 export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) {
-  const {mintTxStatus, mintResult, mint, resetMint, deployFT} = walletSync;
+  const {mintTxStatus, mintResult, mint, mintUnshielded, resetMint, deployFT} = walletSync;
 
-  const [step,            setStep]            = useState<Step>('contract');
+  const [step,            setStep]            = useState<Step>('type');
+  const [mintType,        setMintType]        = useState<MintType>('shielded');
   const [contractAddress, setContractAddress] = useState('');
   const [amountStr,       setAmountStr]       = useState('');
   const [deployError,     setDeployError]     = useState<string | null>(null);
 
   useEffect(() => { resetMint(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Notify parent when past the initial contract-address entry step.
+  // Notify parent when past the initial type-selection step.
   useEffect(() => {
-    onWorkInProgress?.(step !== 'contract');
+    onWorkInProgress?.(step !== 'type');
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { onWorkInProgress?.(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -38,8 +40,9 @@ export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) 
     }
     if (step === 'deploying') return; // no escape while deploying
     if (key.escape) {
-      if (step === 'amount')  { setStep('contract'); return; }
-      if (step === 'confirm') { setStep('amount');   return; }
+      if (step === 'contract') { setStep('type');     return; }
+      if (step === 'amount')   { setStep('contract'); return; }
+      if (step === 'confirm')  { setStep('amount');   return; }
     }
   });
 
@@ -71,7 +74,11 @@ export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) 
 
   async function handleMint() {
     setStep('minting');
-    await mint(contractAddress, BigInt(amountStr));
+    if (mintType === 'unshielded') {
+      await mintUnshielded(contractAddress, BigInt(amountStr));
+    } else {
+      await mint(contractAddress, BigInt(amountStr));
+    }
   }
 
   if (step === 'minting') {
@@ -79,9 +86,13 @@ export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) 
       <Box flexDirection="column" gap={1}>
         {mintTxStatus.stage === 'pending' ? (
           <Box flexDirection="column" gap={1}>
-            <Text color="green">● Minted</Text>
-            <Text dimColor>Token type:</Text>
-            <Text>{mintResult?.tokenType ?? ''}</Text>
+            <Text color="green">● Minted ({mintType})</Text>
+            {mintType === 'shielded' && (
+              <>
+                <Text dimColor>Token type:</Text>
+                <Text>{mintResult?.tokenType ?? ''}</Text>
+              </>
+            )}
             <Text dimColor>Tx hash: <Text color="white">{mintTxStatus.txHash}</Text></Text>
             <Text dimColor>Press Enter to return to dashboard.</Text>
           </Box>
@@ -99,8 +110,23 @@ export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) 
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Text bold color="cyan">Mint Shielded Tokens</Text>
-      <Text dimColor>Mints shielded tokens to the calling wallet's ZSwap address.</Text>
+      <Text bold color="cyan">Mint Tokens</Text>
+
+      {step === 'type' && (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>Select token destination:</Text>
+          <SelectInput
+            items={[
+              {label: 'Shielded   — mint to this wallet\'s ZSwap address (private)', value: 'shielded'},
+              {label: 'Unshielded — mint to this wallet\'s public address',           value: 'unshielded'},
+            ]}
+            onSelect={item => {
+              setMintType(item.value as MintType);
+              setStep('contract');
+            }}
+          />
+        </Box>
+      )}
 
       {step === 'contract' && (
         <Box flexDirection="column" gap={1}>
@@ -146,7 +172,11 @@ export default function Mint({onComplete, walletSync, onWorkInProgress}: Props) 
           <Text bold>Confirm mint</Text>
           <Text dimColor>Contract  <Text color="white">{contractAddress}</Text></Text>
           <Text dimColor>Amount    <Text color="white">{amountStr}</Text></Text>
-          <Text dimColor>Recipient <Text color="white">this wallet's shielded address</Text></Text>
+          <Text dimColor>Recipient <Text color="white">
+            {mintType === 'unshielded'
+              ? "this wallet's unshielded address"
+              : "this wallet's shielded address"}
+          </Text></Text>
           <Text dimColor>ZK proof generation will take 30–60 seconds.</Text>
           <SelectInput
             items={[
