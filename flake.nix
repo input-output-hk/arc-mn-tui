@@ -80,6 +80,7 @@
           ];
 
           shellHook = ''
+            export PS1="\n\[\033[1;32m\][nix develop:\w]\$\[\033[0m\] "
             # Local npm prefix to avoid sudo
             export NPM_CONFIG_PREFIX="$PWD/.npm-global"
             export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"

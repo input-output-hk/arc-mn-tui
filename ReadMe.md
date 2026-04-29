@@ -2,31 +2,35 @@
 
 A terminal-based wallet and contract tool for the Midnight network. A [video demonstration](https://drive.google.com/file/d/1xBTYuUffC7A7F4qkdsLansyHVAMuP7wp/view?usp=sharing) is availble.
 
-> **Warning:** Only minimal quality assurance has been performed on this application.
+> [!Warning]
+>
+> Only minimal quality assurance has been performed on this application.
 
 ## Starting the Application
 
 **Via Nix** (recommended — no local Node.js install required):
 
-```
+```bash
 nix run github:input-output-hk/arc-mn-tui
 ```
 
 or, from a local checkout of the repository:
 
-```
+```bash
 nix run .#mn-tui
 ```
 
 **Via npm:**
 
-```
+```bash
+npm install
 npm start
 ```
 
 or directly:
 
-```
+```bash
+npm install
 npx tsx src/index.tsx
 ```
 
