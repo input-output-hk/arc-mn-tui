@@ -1,5 +1,5 @@
 {
-  description = "Development environment for MidnightOS / NEAR Evaluation with Gemini CLI (Sandboxed)";
+  description = "Development environment for Midnight TUI";
 
   inputs = {
     nixpkgs.url = "github:Nixos/nixpkgs/nixos-unstable";
@@ -18,11 +18,11 @@
 
         mn-tui = pkgs.buildNpmPackage {
           pname    = "mn-tui";
-          version  = "0.1.0";
+          version  = "0.2.0";
           src      = ./.;
 
-          # Recompute with: nix run nixpkgs#prefetch-npm-deps -- experiments/mn-tui/package-lock.json
-          npmDepsHash = "sha256-Hq+TF0RmYE9aeqiIceI6hK2PfV/r1sqyOquhi4gjnP8=";
+          # Recompute with: nix run nixpkgs#prefetch-npm-deps -- package-lock.json
+          npmDepsHash = "sha256-4/8uQUwDFO6vPMFg5CDuoKBABjkF8APbiNJZ2iflvPc=";
 
           # The lock file has an unresolvable smoldot peer-dep conflict inherited
           # from @substrate/connect (a transitive dep of the Midnight SDK).
