@@ -66,3 +66,15 @@ export circuit mint(amount: Uint<64>, token_id_bytes: Bytes<32>): [] {
     // 5. Mint the shielded tokens
     mintShieldedToken(disclosed_token_id, disclosed_amount, unique_nonce, recipient_formatted);
 }
+
+// Mint unshielded (public) tokens to the caller's unshielded address.
+// The recipient is passed explicitly as Bytes<32> (Ed25519 public key).
+export circuit mint_unshielded(amount: Uint<64>, token_id_bytes: Bytes<32>, recipient: Bytes<32>): [] {
+    const disclosed_amount    = disclose(amount);
+    const disclosed_token_id  = disclose(token_id_bytes);
+    const disclosed_recipient = disclose(recipient);
+    total_supply = (total_supply + disclosed_amount) as Uint<64>;
+    mint_nonce   = (mint_nonce + 1) as Uint<64>;
+    const user_addr = right<ContractAddress, UserAddress>(UserAddress { bytes: disclosed_recipient });
+    mintUnshieldedToken(disclosed_token_id, disclosed_amount, user_addr);
+}

@@ -25,6 +25,21 @@ async function rpc<T>(httpUrl: string, method: string, params: unknown[] = []): 
   return json.result;
 }
 
+/** Query the indexer's latest indexed block height via GraphQL. */
+async function fetchIndexerHeight(indexerHttpUrl: string): Promise<number> {
+  const res = await fetch(indexerHttpUrl, {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify({query: '{ block { height } }'}),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json() as {data?: {block?: {height?: number}}; errors?: unknown[]};
+  if (json.errors?.length) throw new Error('GraphQL error from indexer');
+  const h = json.data?.block?.height;
+  if (typeof h !== 'number') throw new Error('No block.height in indexer response');
+  return h;
+}
+
 // ---------------------------------------------------------------------------
 // Epoch / session constants
 //
@@ -96,20 +111,27 @@ interface RpcHealth {
 // ---------------------------------------------------------------------------
 
 const EMPTY: NodeState = {
-  blockHeight:  0,
-  blockHash:    '—',
-  currentSlot:  0,
-  epochIndex:   0,
-  msUntilEpoch: 0,
-  synced:       false,
-  peers:        0,
-  rpcUrl:       '',
+  blockHeight:   0,
+  blockHash:     '—',
+  currentSlot:   0,
+  epochIndex:    0,
+  msUntilEpoch:  0,
+  synced:        false,
+  peers:         0,
+  rpcUrl:        '',
+  indexerHeight: 0,
 };
 
-export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_000, paused = false) {
+export function useMidnightNode(
+  rpcUrl      = 'ws://localhost:9944',
+  indexerUrl  = '',
+  intervalMs  = 6_000,
+  paused      = false,
+) {
   const [node,  setNode]  = useState<NodeState>({...EMPTY, rpcUrl});
   const [error, setError] = useState<string | null>(null);
-  const lastHeightRef     = useRef<number>(-1);
+  const lastHeightRef        = useRef<number>(-1);
+  const lastIndexerHeightRef = useRef<number>(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +152,13 @@ export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_0
         if (newHeight === lastHeightRef.current) return; // block unchanged — skip re-render
         lastHeightRef.current = newHeight;
 
+        // Indexer tip — best-effort; failures keep the last known value.
+        if (indexerUrl) {
+          try {
+            lastIndexerHeightRef.current = await fetchIndexerHeight(indexerUrl);
+          } catch { /* retain previous value */ }
+        }
+
         const currentSlot  = parseAuraSlot(header.digest.logs);
         const epochIndex   = Math.floor(currentSlot / EPOCH_LENGTH_SLOTS);
         const slotInEpoch  = currentSlot % EPOCH_LENGTH_SLOTS;
@@ -137,13 +166,14 @@ export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_0
 
         setNode({
           rpcUrl,
-          blockHeight: parseInt(header.number, 16),
+          blockHeight:   newHeight,
           blockHash,
           currentSlot,
           epochIndex,
           msUntilEpoch,
-          synced:  syncState.currentBlock >= syncState.highestBlock,
-          peers:   health.peers,
+          synced:        syncState.currentBlock >= syncState.highestBlock,
+          peers:         health.peers,
+          indexerHeight: lastIndexerHeightRef.current,
         });
         setError(null);
       } catch (e) {
@@ -161,7 +191,7 @@ export function useMidnightNode(rpcUrl = 'ws://localhost:9944', intervalMs = 6_0
       return () => { cancelled = true; clearInterval(id); };
     }
     return () => { cancelled = true; };
-  }, [rpcUrl, intervalMs, paused]);
+  }, [rpcUrl, indexerUrl, intervalMs, paused]);
 
   return {node, error};
 }
