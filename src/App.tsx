@@ -125,7 +125,7 @@ export default function App() {
 
       {/* Source URL */}
       <Box justifyContent="center">
-        <Text dimColor>https://github.com/input-output-hk/arc-nearfall-evaluation/tree/main/experiments/mn-tui/</Text>
+        <Text dimColor>https://github.com/input-output-hk/arc-mn-tui/tree/main/experiments/mn-tui/</Text>
       </Box>
 
     </Box>

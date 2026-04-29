@@ -9,7 +9,7 @@ A terminal-based wallet and contract tool for the Midnight network. A [video dem
 **Via Nix** (recommended — no local Node.js install required):
 
 ```
-nix run github:input-output-hk/arc-nearfall-eval#mn-tui
+nix run github:input-output-hk/arc-mn-tui
 ```
 
 or, from a local checkout of the repository:
@@ -177,11 +177,6 @@ View and manage the application debug log.
 | `~/.cache/mn-tui/sync-state/{network}/{address}-{type}.state` | Serialized wallet sync state cache (shielded / unshielded / dust) |
 | `~/.cache/mn-tui/level-db/{network}/{key-prefix}/` | LevelDB private-state store used by contract operations (deploy, mint) |
 | `~/.mn-tui.log` | Default application log file (path configurable on the Logs screen) |
-
----
-
-See [lessons-learned.md](lessons-learned.md) for a record of non-trivial obstacles
-encountered during development and their workarounds.
 
 ---
 
