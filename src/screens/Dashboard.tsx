@@ -73,7 +73,7 @@ const TYPE_W  = 12;
 const TOKEN_W = 66;
 
 export default function Dashboard({network, paused, walletSync}: Props) {
-  const {node, error: nodeError}             = useMidnightNode(network.nodeUrl, 6_000, paused);
+  const {node, error: nodeError}             = useMidnightNode(network.nodeUrl, network.indexerUrl, 6_000, paused);
   const {activeWallet, activeIndex, getMnemonic} = useWallet();
   const [clock, setClock]                    = useState(utcTime);
 
@@ -108,10 +108,11 @@ export default function Dashboard({network, paused, walletSync}: Props) {
           <Box flexDirection="row">
             {/* Left column: label + primary value */}
             <Box flexDirection="column" width={24}>
-              <Text dimColor>peers <Text color="white">{node.peers}</Text></Text>
-              <Text dimColor>epoch <Text color="white">{node.epochIndex}</Text></Text>
-              <Text dimColor>slot  <Text color="white">{node.currentSlot}</Text></Text>
-              <Text dimColor>block <Text color="white">{node.blockHeight}</Text></Text>
+              <Text dimColor>peers   <Text color="white">{node.peers}</Text></Text>
+              <Text dimColor>epoch   <Text color="white">{node.epochIndex}</Text></Text>
+              <Text dimColor>slot    <Text color="white">{node.currentSlot}</Text></Text>
+              <Text dimColor>block   <Text color="white">{node.blockHeight}</Text></Text>
+              <Text dimColor>indexer <Text color="white">{node.indexerHeight > 0 ? node.indexerHeight : '—'}</Text></Text>
             </Box>
             {/* Right column: secondary values */}
             <Box flexDirection="column" flexGrow={1}>
@@ -121,6 +122,12 @@ export default function Dashboard({network, paused, walletSync}: Props) {
               <Text dimColor>next <Text color="white">{node.msUntilEpoch > 0 ? fmtDuration(node.msUntilEpoch) : '—'}</Text></Text>
               <Text dimColor>{clock}</Text>
               <Text dimColor wrap="truncate">hash <Text color="white">{node.blockHash}</Text></Text>
+              {node.indexerHeight > 0 && (() => {
+                const lag = node.blockHeight - node.indexerHeight;
+                return lag > 5
+                  ? <Text color="yellow">⚠ {lag} blocks behind</Text>
+                  : <Text color="green">● current</Text>;
+              })()}
             </Box>
           </Box>
         )}
@@ -145,11 +152,13 @@ export default function Dashboard({network, paused, walletSync}: Props) {
       <Box flexDirection="column" borderStyle="single" paddingX={1}>
         <Box gap={2}>
           <Text bold color="cyan">Balances</Text>
-          {activeWallet && mnemonic && (
-            <Text color={walletSynced ? 'green' : 'red'}>
-              {walletSynced ? '● synced' : '○ syncing'}
-            </Text>
-          )}
+          {activeWallet && mnemonic && (() => {
+            const indexerLag = node.indexerHeight > 0 ? node.blockHeight - node.indexerHeight : 0;
+            const indexerCurrent = indexerLag <= 5;
+            if (!walletSynced)    return <Text color="red">○ syncing</Text>;
+            if (!indexerCurrent)  return <Text color="yellow">⚠ indexer {indexerLag} blocks behind</Text>;
+            return                       <Text color="green">● synced</Text>;
+          })()}
         </Box>
 
         {walletError ? (
